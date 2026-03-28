@@ -1,3 +1,5 @@
+import os
+import uvicorn
 from fastapi import FastAPI
 from Aipipeline import AIpipeline
 from Models import ProblemReq, Finalresult
@@ -18,4 +20,5 @@ async def run_pipeline(problem: ProblemReq):
 import uvicorn
 
 if __name__ == "__main__":
-    uvicorn.run("main:AiEngine", host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:AiEngine", host="0.0.0.0", port=port)
