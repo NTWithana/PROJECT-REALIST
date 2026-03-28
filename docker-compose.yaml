@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  realistapi:
+    build: ./BACKEND/RealistAPI
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+
+  aiengine:
+    build: ./BACKEND/RalistAIengine
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+
+  frontend:
+    build: ./FRONTEND/realist-frontend
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}

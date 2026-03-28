@@ -1,0 +1,7 @@
+bin
+obj
+.user
+.log
+.pdb
+.vscode
+.DS_Store

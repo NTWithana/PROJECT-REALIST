@@ -1,0 +1,67 @@
+﻿namespace RealistAPI.Models
+{
+    public class ProblemReqDto
+    {
+        public string SessionId { get; set; }
+        public string Description { get; set; }
+        public string Suggestions { get; set; }
+        public string Domain { get; set; }
+        public List<string> Tags { get; set; }
+    }
+}
+public class CreateProblemRequest
+{
+    public string Description { get; set; }
+    public string Suggestions { get; set; }
+    public string Domain { get; set; }
+    public List<string> Tags { get; set; } = new();
+}
+public class AiEngineResponseDto
+{
+    public string Status { get; set; }
+    public string OptimisedSolution { get; set; }
+    public string Critique { get; set; }
+    public string Improvements { get; set; }
+    public double Confidence { get; set; }
+    public string Rationale { get; set; }
+    public int Iteration { get; set; }
+    public DateTime Created_At { get; set; }
+}
+
+
+public class FeedbackDto
+{
+    public List<string> Messages { get; set; }
+
+public class EditSolutionRequest
+{
+        public string NewText { get; set; }
+        public string Comment { get; set; }
+}
+public class ChatAiRequest
+{
+        public string Message { get; set; }
+}
+public class ApproveAiRequest
+{
+   public string MergedText { get; set; }
+   public string SuggestionSummary { get; set; }
+}
+ public class InviteCollaboratorRequest
+{
+    public string UserId { get; set; }
+}
+
+    public class CreateSessionRequest
+    {
+        public string Title { get; set; }
+        public string Description { get; set; }
+    }
+    public class ChatResponseDto
+    {
+        public string Message { get; set; }
+    }
+
+
+
+}

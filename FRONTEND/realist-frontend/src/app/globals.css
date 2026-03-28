@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  @apply bg-[#000000] text-white;
+}
+
+/* SLOW PULSE */
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 4s ease-in-out infinite;
+}
+
+/* LETTER BY LETTER TITLE REVEAL */
+@keyframes titleReveal {
+  0% { opacity: 0; filter: blur(6px); }
+  100% { opacity: 1; filter: blur(0); }
+}
+
+.title-letter {
+  opacity: 0;
+  animation: titleReveal 0.05s forwards;
+}
+
+/* CARD FADE + SLIDE UP */
+@keyframes fadeSlideUp {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+    filter: blur(6px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.fade-slide-up {
+  animation: fadeSlideUp 0.8s ease forwards;
+}
