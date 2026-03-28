@@ -20,8 +20,7 @@ RUN npm install --omit=dev
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/public ./public
 
-# Copy config files
-COPY --from=build /app/next.config.js ./
+# Copy package files
 COPY --from=build /app/package*.json ./
 
 EXPOSE 3000
