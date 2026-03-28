@@ -2,13 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy requirements from AiEngine folder
+ENV PYTHONUNBUFFERED=1
+
+# Copy requirements first for caching
 COPY AiEngine/requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the AI engine code
+# Copy AI engine code
 COPY AiEngine/ .
 
 EXPOSE 8000
+
 CMD ["python", "main.py"]
