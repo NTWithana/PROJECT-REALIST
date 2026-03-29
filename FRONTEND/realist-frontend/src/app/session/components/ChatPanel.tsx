@@ -88,7 +88,7 @@ export default function ChatPanel({ sessionId }: { sessionId: string }) {
   );
 }
 
-// ✅ FIXED: Properly typed props
+// props
 function Tab({
   active,
   onClick,
