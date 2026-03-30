@@ -20,13 +20,25 @@ public class AiEngineResponseDto
 {
     public string Status { get; set; }
     public string OptimisedSolution { get; set; }
-    public string Critique { get; set; }
-    public string Improvements { get; set; }
     public double Confidence { get; set; }
     public string Rationale { get; set; }
     public int Iteration { get; set; }
     public DateTime Created_At { get; set; }
+
+    // to get artifacts
+    public string DeepCore { get; set; }
+    public string Critique { get; set; }
+    public string Improvements { get; set; }
+
+    public bool UsedRag { get; set; }
+    public bool UsedDeep { get; set; }
+    public bool DeepCacheHit { get; set; }
+    public bool RagCacheHit { get; set; }
+
+    public string ProblemKey { get; set; }
+    public List<string> RetrievedKnowledgeIds { get; set; } = new();
 }
+
 
 
 public class FeedbackDto
@@ -59,9 +71,8 @@ public class ApproveAiRequest
     }
     public class ChatResponseDto
     {
-        public string Message { get; set; }
+        public string Response { get; set; }
     }
-
 
 
 }

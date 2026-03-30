@@ -1,57 +1,51 @@
-﻿using RealistAPI.Interfaces;
+﻿using System.Net.Http.Json;
+using Microsoft.Extensions.Configuration;
+using RealistAPI.Interfaces;
 using RealistAPI.Models;
-using System.Net.Http.Json;
-using static FeedbackDto;
 
 namespace RealistAPI.Services
 {
     public class AiEngineService : IAiEngineService
     {
         private readonly HttpClient _http;
-        private readonly string _aiUrl;
+        private readonly string _baseUrl;
 
         public AiEngineService(HttpClient http, IConfiguration config)
         {
             _http = http;
-            _aiUrl = config["AI_ENGINE_URL"] ?? "http://localhost:8000";
+            _baseUrl = config["AI_ENGINE_URL"]
+                       ?? throw new InvalidOperationException("AI_ENGINE_URL not configured");
         }
 
-        // Run full PESO pipeline
+        //  RUN FULL PIPELINE 
         public async Task<AiEngineResponseDto> RunPipelineAsync(ProblemReqDto req)
         {
-            var response = await _http.PostAsJsonAsync($"{_aiUrl}/run-pipeline", req);
+            var res = await _http.PostAsJsonAsync($"{_baseUrl}/run-pipeline", req);
 
-            if (!response.IsSuccessStatusCode)
-                throw new Exception("AI engine error: " + await response.Content.ReadAsStringAsync());
+            if (!res.IsSuccessStatusCode)
+                throw new Exception("AI engine error: " + await res.Content.ReadAsStringAsync());
 
-            var result = await response.Content.ReadFromJsonAsync<AiEngineResponseDto>();
-            return result!;
+            var data = await res.Content.ReadFromJsonAsync<AiEngineResponseDto>();
+            return data!;
         }
 
-        // General Chat AI
+        //  GENERAL CHAT 
         public async Task<string> RunChatAsync(string message)
         {
-            var payload = new { message = message };
+            var payload = new { message };
 
-            var response = await _http.PostAsJsonAsync($"{_aiUrl}/chat", payload);
+            var res = await _http.PostAsJsonAsync($"{_baseUrl}/chat", payload);
 
-            if (!response.IsSuccessStatusCode)
-                throw new Exception("AI chat error: " + await response.Content.ReadAsStringAsync());
+            if (!res.IsSuccessStatusCode)
+                throw new Exception("AI chat error: " + await res.Content.ReadAsStringAsync());
 
-            // Try JSON first
-            try
-            {
-                var json = await response.Content.ReadFromJsonAsync<ChatResponseDto>();
-                if (json != null && !string.IsNullOrWhiteSpace(json.Message))
-                    return json.Message;
-            }
-            catch
-            {
-                // Ignore JSON parsing errors
-            }
-
-            // Fallback: raw text
-            return await response.Content.ReadAsStringAsync();
+            var data = await res.Content.ReadFromJsonAsync<ChatResponseDto>();
+            return data?.Response ?? "";
         }
+    }
+
+    public class ChatResponseDto
+    {
+        public string Response { get; set; } = "";
     }
 }

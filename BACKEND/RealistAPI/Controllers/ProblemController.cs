@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR.Protocol;
 using RealistAPI.Interfaces;
 using RealistAPI.Models;
 
@@ -248,21 +249,40 @@ namespace RealistAPI.Controllers
                 Improvements = aiResult.Improvements,
                 Iteration = solutionDoc.Versions.Count + 1,
                 Confidence = aiResult.Confidence,
-                Created_At = DateTime.UtcNow
+                Created_At = DateTime.UtcNow,
+
+                DeepCore = aiResult.DeepCore,
+                UsedRag = aiResult.UsedRag,
+                UsedDeep = aiResult.UsedDeep,
+                DeepCacheHit = aiResult.DeepCacheHit,
+                RagCacheHit = aiResult.RagCacheHit,
+                ProblemKey = aiResult.ProblemKey,
+                RetrievedKnowledgeIds = aiResult.RetrievedKnowledgeIds ?? new List<string>()
             };
 
             solutionDoc.Versions.Add(version);
             await _solutions.UpdateAsync(solutionDoc);
-            await _globalKnowledge.CreateAsync(new GlobalKnowledge
+            var knowledge = await _globalKnowledge.CreateAsync(new GlobalKnowledge
             {
                 ProblemId = problem.Id,
                 SessionId = sessionId,
                 Domain = problem.Domain,
                 Tags = problem.Tags ?? new List<string>(),
+
+                ProblemKey = aiResult.ProblemKey,
                 ProblemSummary = problem.Description,
                 SolutionSummary = version.SolutionText,
+                DeepCore = aiResult.DeepCore,
+
+                SourceKnowledgeIds = aiResult.RetrievedKnowledgeIds ?? new List<string>(),
+                UsedRag = aiResult.UsedRag,
+                UsedDeep = aiResult.UsedDeep,
+                DeepCacheHit = aiResult.DeepCacheHit,
+                RagCacheHit = aiResult.RagCacheHit,
+
                 Confidence = version.Confidence,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                Score = 0
             });
 
 
@@ -331,12 +351,11 @@ namespace RealistAPI.Controllers
             return Ok(new { response = aiResponse });
         }
 
-
         [HttpPost("{problemId}/approve-ai")]
         public async Task<IActionResult> ApproveAiSuggestion(
-    string sessionId,
-    string problemId,
-    [FromBody] ApproveAiRequest req)
+            string sessionId,
+            string problemId,
+            [FromBody] ApproveAiRequest req)
         {
             var userId = GetUserId();
             if (userId == null) return Unauthorized();
@@ -356,6 +375,7 @@ namespace RealistAPI.Controllers
 
             var solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
 
+            // Create new version from approved suggestion
             var version = new SolutionVersion
             {
                 Id = Guid.NewGuid().ToString(),
@@ -369,24 +389,35 @@ namespace RealistAPI.Controllers
 
             solutionDoc.Versions.Add(version);
             await _solutions.UpdateAsync(solutionDoc);
-            
-            await _globalKnowledge.CreateAsync(new GlobalKnowledge
+
+            // Store in global knowledge
+            var knowledge = await _globalKnowledge.CreateAsync(new GlobalKnowledge
             {
                 ProblemId = problem.Id,
                 SessionId = sessionId,
                 Domain = problem.Domain,
                 Tags = problem.Tags ?? new List<string>(),
-                ProblemSummary = problem.Description,
-                SolutionSummary = req.MergedText,
-                Confidence = 1.0,
-                CreatedAt = DateTime.UtcNow
-            });
-            // After creating new GlobalKnowledge entry
-            await _globalKnowledge.IncrementApprovedAsync(problem.Id);
 
+                ProblemSummary = problem.Description,
+                SolutionSummary = version.SolutionText,
+                Confidence = version.Confidence,
+                CreatedAt = DateTime.UtcNow,
+
+                // No AI pipeline here, so no deepcore/rag metadata
+                SourceKnowledgeIds = new List<string>(),
+                UsedRag = false,
+                UsedDeep = false,
+                DeepCacheHit = false,
+                RagCacheHit = false,
+                Score = 0
+            });
+
+            // Increment approval for THIS knowledge entry
+            await _globalKnowledge.IncrementApprovedAsync(knowledge.Id);
 
             return Ok(version);
         }
+
 
 
         [HttpPost("{problemId}/optimize")]
@@ -437,8 +468,18 @@ namespace RealistAPI.Controllers
                 Improvements = aiResult.Improvements,
                 Iteration = solutionDoc.Versions.Count + 1,
                 Confidence = aiResult.Confidence,
-                Created_At = DateTime.UtcNow
+                Created_At = DateTime.UtcNow,
+
+                DeepCore = aiResult.DeepCore,
+                UsedRag = aiResult.UsedRag,
+                UsedDeep = aiResult.UsedDeep,
+                DeepCacheHit = aiResult.DeepCacheHit,
+                RagCacheHit = aiResult.RagCacheHit,
+                ProblemKey = aiResult.ProblemKey,
+                RetrievedKnowledgeIds = aiResult.RetrievedKnowledgeIds ?? new List<string>()
             };
+
+
 
             solutionDoc.Versions.Add(newVersion);
             await _solutions.UpdateAsync(solutionDoc);
@@ -449,10 +490,20 @@ namespace RealistAPI.Controllers
                 SessionId = sessionId,
                 Domain = problem.Domain,
                 Tags = problem.Tags ?? new List<string>(),
+
+                ProblemKey = aiResult.ProblemKey,
                 ProblemSummary = problem.Description,
                 SolutionSummary = newVersion.SolutionText,
+                DeepCore = aiResult.DeepCore,
+
+                SourceKnowledgeIds = aiResult.RetrievedKnowledgeIds ?? new List<string>(),
+                UsedRag = aiResult.UsedRag,
+                UsedDeep = aiResult.UsedDeep,
+                DeepCacheHit = aiResult.DeepCacheHit,
+                RagCacheHit = aiResult.RagCacheHit,
                 Confidence = newVersion.Confidence,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                Score = 0
             });
             await _globalKnowledge.IncrementOptimizedAsync(problem.Id);
 
@@ -569,8 +620,16 @@ namespace RealistAPI.Controllers
                 latestSolution = latest
             });
         }
+        public class MarkReusedRequest
+        {
+            public string KnowledgeId { get; set; }
+        }
+
         [HttpPost("{problemId}/mark-reused")]
-        public async Task<IActionResult> MarkSolutionReused(string sessionId, string problemId)
+        public async Task<IActionResult> MarkSolutionReused(
+            string sessionId,
+            string problemId,
+            [FromBody] MarkReusedRequest req)
         {
             var userId = User.FindFirst("sub")?.Value;
             if (userId == null) return Unauthorized();
@@ -581,12 +640,7 @@ namespace RealistAPI.Controllers
             if (!session.Collaborators.Contains(userId))
                 return Forbid();
 
-            var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            await _globalKnowledge.IncrementReusedAsync(problem.Id);
-
+            await _globalKnowledge.IncrementReusedAsync(req.KnowledgeId);
             return Ok(new { message = "Marked as reused" });
         }
 
@@ -603,4 +657,4 @@ namespace RealistAPI.Controllers
 
 
 
-    
+

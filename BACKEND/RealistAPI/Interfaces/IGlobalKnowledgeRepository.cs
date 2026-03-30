@@ -4,15 +4,18 @@ namespace RealistAPI.Interfaces
 {
     public interface IGlobalKnowledgeRepository
     {
-        Task CreateAsync(GlobalKnowledge doc);
+        Task<GlobalKnowledge> CreateAsync(GlobalKnowledge doc);
+
+
         Task<List<GlobalKnowledge>> FindSemanticSimilarAsync(
         List<double> embedding,
         int limit = 10,
         string? domain = null,
         List<string>? tags = null);
-        Task IncrementApprovedAsync(string problemId);
-        Task IncrementOptimizedAsync(string problemId);
-        Task IncrementReusedAsync(string problemId);
+        Task IncrementApprovedAsync(string knowledgeId);
+        Task IncrementOptimizedAsync(string knowledgeId);
+        Task IncrementReusedAsync(string knowledgeId);
+
         Task<List<GlobalKnowledge>> GetTrendingAsync(int limit = 20);
         Task<object> GetStatsAsync();
 

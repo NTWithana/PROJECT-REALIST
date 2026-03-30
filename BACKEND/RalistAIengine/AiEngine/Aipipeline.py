@@ -1,196 +1,235 @@
 import os
-from datetime import datetime
+import re
+import hashlib
+import logging
+import asyncio
+from datetime import datetime, timedelta
+from typing import Dict, Any
+
 import httpx
 from dotenv import load_dotenv
-from Models import ProblemReq, Finalresult 
+from Models import ProblemReq, Finalresult
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
-#  MODEL CALLS (STUBS — replace with real API calls)
+# CONFIG
+
+CACHE_TTL = timedelta(hours=6)
+RAG_TTL = timedelta(hours=2)
+
+CONF_SKIP_DEEP = 0.70
+CONF_MIN_REFINE = 0.55
+
+MAX_CACHE_SIZE = 500
+
+DEEP_CACHE: Dict[str, Dict[str, Any]] = {}
+RAG_CACHE: Dict[str, Dict[str, Any]] = {}
+
+# Prevent deep overload
+DEEP_LIMIT = asyncio.Semaphore(3)
 
 
-# Gemini Flash — light tasks
+# MODEL STUBS
+
 async def flash_chat(prompt: str) -> str:
-    return f"[Gemini-Flash] {prompt[:800]}"
+    return f"[Gemini-Flash] {prompt[:1200]}"
 
-# DeepSeek Reasoner — heavy reasoning
 async def deepseek_reasoner(prompt: str) -> str:
-    return f"[DeepSeek-Reasoner] {prompt[:800]}"
+    return f"[DeepSeek-Reasoner] {prompt[:2000]}"
 
 
-#  FLASH HELPERS
+# SAFE CALL
+
+async def safe_call(fn, *args, timeout=8):
+    try:
+        return await asyncio.wait_for(fn(*args), timeout=timeout)
+    except Exception as e:
+        logger.error(f"{fn.__name__} failed: {e}")
+        return ""
 
 
-async def flash_clean(problem: ProblemReq) -> str:
-    prompt = (
-        "You are a mediator for a global human + AI hive mind.\n"
-        "Clean and summarize the user's problem.\n"
-        "Remove noise, repetition, and irrelevant details.\n\n"
-        f"Original description:\n{problem.description}\n\n"
-        "Return a concise, clear summary of the core problem."
+# UTILITIES
+
+def now() -> datetime:
+    return datetime.utcnow()
+
+def trim(text: str, limit: int = 800) -> str:
+    return (text or "")[:limit]
+
+def cache_key(problem: ProblemReq, intent: str) -> str:
+    raw = f"{problem.description}-{getattr(problem,'domain',None)}-{getattr(problem,'tags',None)}-{intent}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+def is_fresh(ts: datetime, ttl: timedelta) -> bool:
+    return (now() - ts) < ttl
+
+def clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
+
+def parse_confidence(raw: str) -> float:
+    m = re.search(r"(0(?:\.\d+)?|1(?:\.0+)?)", raw or "")
+    return clamp01(float(m.group(1))) if m else 0.6
+
+def evict_if_needed(cache: Dict):
+    if len(cache) > MAX_CACHE_SIZE:
+        oldest = sorted(cache.items(), key=lambda x: x[1]["ts"])[0][0]
+        cache.pop(oldest, None)
+
+
+# MERGED FLASH GENERATION + CONFIDENCE 
+
+async def flash_generate_with_conf(prompt: str):
+    full_prompt = f"""
+Answer the problem AND give confidence.
+
+FORMAT:
+ANSWER:
+<your answer>
+
+CONFIDENCE:
+<number between 0 and 1>
+
+PROBLEM:
+{prompt}
+"""
+    raw = await safe_call(flash_chat, full_prompt)
+
+    answer = raw.split("CONFIDENCE:")[0].replace("ANSWER:", "").strip()
+    conf = parse_confidence(raw)
+
+    return answer, conf
+
+
+# FLASH ANALYSIS
+
+async def analyze_problem(text: str):
+    prompt = f"""
+Return JSON only:
+{{"intent":"solve|build|fix|research|analyze|plan|create|learn|explore|decide","use_rag":true|false}}
+
+TEXT:
+{text}
+"""
+    raw = await safe_call(flash_chat, prompt)
+
+    intent = re.search(r'"intent"\s*:\s*"(\w+)"', raw)
+    rag = re.search(r'"use_rag"\s*:\s*(true|false)', raw)
+
+    return (
+        intent.group(1) if intent else "solve",
+        rag.group(1) == "true" if rag else False
     )
-    return await flash_chat(prompt)
-
-async def flash_detect_intent(description: str) -> str:
-    prompt = (
-        "You are an intent classifier.\n"
-        "Choose ONE intent:\n"
-        "solve, build, fix, research, analyze, plan, create, learn, explore, decide\n\n"
-        f"{description}"
-    )
-    raw = await flash_chat(prompt)
-    for intent in ["solve","build","fix","research","analyze","plan","create","learn","explore","decide"]:
-        if intent in raw.lower():
-            return intent
-    return "solve"
-
-async def flash_polish(text: str) -> str:
-    prompt = (
-        "You are polishing a final AI-generated solution.\n"
-        "Improve clarity, structure, and readability.\n\n"
-        f"{text}"
-    )
-    return await flash_chat(prompt)
 
 
-#  RAG
+# RAG (improved signal)
 
+async def retrieve_rag(problem: ProblemReq, intent: str, use_rag: bool) -> str:
+    if not use_rag:
+        return ""
 
-async def retrievesimilar(problem: ProblemReq):
-    BASE_URL = os.getenv("REALIST_API_URL", "http://localhost:5109")
-    url = f"{BASE_URL}/api/knowledge/semantic-similar"
+    key = cache_key(problem, intent)
+    cached = RAG_CACHE.get(key)
 
-    query_text = problem.description or problem.suggestions or ""
+    if cached and is_fresh(cached["ts"], RAG_TTL):
+        return cached["data"]
 
-    params = {"query": query_text}
-
-    if getattr(problem, "domain", None):
-        params["domain"] = problem.domain
-
-    if problem.tags:
-        params["tags"] = problem.tags
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-
-        if response.status_code != 200:
-            return ""
-
-        data = response.json()
-        blocks = []
-
-        for item in data:
-            blocks.append(
-                f"- Problem: {item.get('problem_summary')}\n"
-                f"  Solution: {item.get('solution_summary')}\n"
-                f"  Meta: confidence={item.get('confidence')}, "
-                f"approved={item.get('approved_count')}, "
-                f"optimized={item.get('optimized_count')}, "
-                f"reused={item.get('reused_count')}"
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            res = await client.get(
+                f"{os.getenv('REALIST_API_URL')}/api/knowledge/semantic-similar",
+                params={"query": problem.description}
             )
 
-        return "\n".join(blocks)
+            if res.status_code != 200:
+                return ""
+
+            data = res.json()[:5]
+
+            raw_context = "\n".join([
+                f"- Problem: {x.get('problem_summary','')}\n  Solution: {x.get('solution_summary','')}"
+                for x in data
+            ])
+
+            # 🔥 compress RAG (Fix #3)
+            context = await safe_call(flash_chat, f"Summarize key insights:\n{raw_context}")
+
+            RAG_CACHE[key] = {"data": context, "ts": now()}
+            evict_if_needed(RAG_CACHE)
+
+            return context
+
+    except Exception as e:
+        logger.error(f"RAG error: {e}")
+        return ""
 
 
-#  LOGGING
+# DEEP CORE (throttled)
 
+async def get_deep_core(problem: ProblemReq, cleaned: str, context: str, intent: str) -> str:
+    key = cache_key(problem, intent)
+    cached = DEEP_CACHE.get(key)
 
-def logstep(iteration: int, model: str, output: str, confidence: float, rationale: str) -> dict:
-    return {
-        "iteration": iteration,
-        "model": model,
-        "output": output,
-        "confidence": confidence,
-        "rationale": rationale,
-    }
+    if cached and is_fresh(cached["ts"], CACHE_TTL):
+        return cached["data"]
 
+    prompt = f"""
+Deep reasoning.
 
-#  MODEL ROUTER
+INTENT: {intent}
 
-
-async def model_router(task: str, context: str = "") -> str:
-    if task == "reason":
-        return await deepseek_reasoner(context)
-
-    if task == "polish":
-        return await flash_polish(context)
-
-    raise ValueError(f"Unknown task: {task}")
-
-
-#  SELF-CRITIQUE & IMPROVEMENTS
-
-
-async def self_critique(solution: str) -> str:
-    prompt = (
-        "Critically evaluate the solution.\n"
-        "List weaknesses, risks, and missing elements.\n\n"
-        f"{solution}"
-    )
-    return await deepseek_reasoner(prompt)
-
-async def improvement_suggestions(solution: str) -> str:
-    prompt = (
-        "Suggest concrete improvements.\n\n"
-        f"{solution}"
-    )
-    return await deepseek_reasoner(prompt)
-
-
-#  PIPELINE
-
-
-async def hive_pipeline(problem: ProblemReq, intent: str):
-    history = []
-    iteration = 1
-    confidence = 0.6
-
-    # Step 1 — Clean
-    cleaned = await flash_clean(problem)
-    history.append(logstep(iteration, "Flash Clean", cleaned, confidence, "Cleaned input"))
-    iteration += 1
-    confidence += 0.1
-
-    # Step 2 — RAG
-    retrieved = await retrievesimilar(problem)
-    history.append(logstep(iteration, "RAG", retrieved or "None", confidence, "Retrieved context"))
-    iteration += 1
-    confidence += 0.05
-
-    # Step 3 — Reason
-    reason_prompt = f"""
-Intent: {intent}
-
-Problem:
+PROBLEM:
 {cleaned}
 
-Context:
-{retrieved}
+CONTEXT:
+{context}
+
+Be structured, correct, and practical.
 """
-    core_solution = await model_router("reason", reason_prompt)
-    history.append(logstep(iteration, "Reasoner", core_solution, confidence, "Generated solution"))
-    iteration += 1
-    confidence += 0.1
 
-    # Step 4 — Critique
-    critique = await self_critique(core_solution)
-    history.append(logstep(iteration, "Critique", critique, confidence, "Evaluated solution"))
-    iteration += 1
-    confidence += 0.05
+    async with DEEP_LIMIT:
+        result = await safe_call(deepseek_reasoner, prompt)
 
-    # Step 5 — Improvements
-    improvements = await improvement_suggestions(core_solution)
-    history.append(logstep(iteration, "Improvements", improvements, confidence, "Suggested improvements"))
-    iteration += 1
-    confidence += 0.05
+    DEEP_CACHE[key] = {"data": result, "ts": now()}
+    evict_if_needed(DEEP_CACHE)
 
-    #  Step 6 — FINAL SYNTHESIS + POLISH (UPGRADED)
-    final_input = f"""
-You are producing the final answer for a global AI system.
+    return result
 
-CORE SOLUTION:
-{core_solution}
+
+# PIPELINE
+
+async def hive_pipeline(problem: ProblemReq):
+    cleaned = trim(problem.description)
+
+    intent, use_rag = await analyze_problem(cleaned)
+
+    context = await retrieve_rag(problem, intent, use_rag)
+
+    # Step 1 — Draft + confidence (merged)
+    draft, conf = await flash_generate_with_conf(f"{cleaned}\n{context}")
+
+    # Step 2 — Deep decision
+    if conf >= CONF_SKIP_DEEP:
+        core = draft
+        used_deep = False
+    else:
+        core = await get_deep_core(problem, cleaned, context, intent)
+        used_deep = True
+
+    # Step 3 — Conditional refinement (Fix #2)
+    if conf < CONF_MIN_REFINE:
+        critique = await safe_call(flash_chat, f"Critique:\n{core}")
+        improvements = await safe_call(flash_chat, f"Improve:\n{core}\n{critique}")
+    else:
+        critique = ""
+        improvements = ""
+
+    # Step 4 — Final synthesis
+    final = await safe_call(flash_chat, f"""
+FINAL ANSWER:
+
+{core}
 
 CRITIQUE:
 {critique}
@@ -198,41 +237,38 @@ CRITIQUE:
 IMPROVEMENTS:
 {improvements}
 
-Instructions:
-- Fix weaknesses
-- Apply improvements
-- Keep good parts
-- Output a complete, structured answer
-"""
+Produce best structured answer.
+""")
 
-    final = await model_router("polish", final_input)
+    # Final confidence update (Fix #6)
+    final_conf = parse_confidence(await safe_call(flash_chat, f"Score 0-1:\n{final}"))
 
-    history.append(logstep(
-        iteration,
-        "Final Synthesis",
-        final,
-        confidence,
-        "Synthesized improved final output"
-    ))
-
-    return final, history, iteration, confidence
+    return final, clamp01(max(conf, final_conf))
 
 
-#  MAIN ENTRY
-
+# ENTRY
 
 async def AIpipeline(problem: ProblemReq) -> Finalresult:
-    description = (problem.description or "").lower()
+    try:
+        final, confidence = await hive_pipeline(problem)
 
-    intent = await flash_detect_intent(description)
+        return Finalresult(
+            Status="ok",
+            OptimisedSolution=final,
+            Confidence=confidence,
+            Rationale="Optimized hybrid pipeline (cost-efficient, gated deep reasoning, RAG-aware)",
+            Iteration=1,
+            Created_At=now()
+        )
 
-    final, history, iteration, confidence = await hive_pipeline(problem, intent)
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}")
 
-    return Finalresult(
-        Status="ok",
-        OptimisedSolution=final,
-        Confidence=confidence,
-        Rationale=history[-1]["rationale"],
-        Iteration=iteration,
-        Created_At=datetime.utcnow()
-    )
+        return Finalresult(
+            Status="error",
+            OptimisedSolution="Something went wrong.",
+            Confidence=0.3,
+            Rationale=str(e),
+            Iteration=0,
+            Created_At=now()
+        )
