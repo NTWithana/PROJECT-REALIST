@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR.Protocol;
 using RealistAPI.Interfaces;
 using RealistAPI.Models;
 
@@ -10,7 +9,7 @@ namespace RealistAPI.Controllers
 {
     [ApiController]
     [Route("api/sessions/{sessionId}/problems")]
-    [Authorize] // All endpoints require JWT
+    [Authorize]
     public class ProblemController : ControllerBase
     {
         private readonly ISessionRepository _sessions;
@@ -27,8 +26,6 @@ namespace RealistAPI.Controllers
             IAiEngineService ai,
             IGlobalKnowledgeRepository globalKnowledge,
             IEmbeddingService embedding)
-
-
         {
             _sessions = sessions;
             _problems = problems;
@@ -38,38 +35,33 @@ namespace RealistAPI.Controllers
             _embedding = embedding;
         }
 
-        // Helper: get userId from JWT
-        private string? GetUserId() =>
-            User.FindFirst("sub")?.Value;
+        private string? GetUserId() => User.FindFirst("sub")?.Value;
 
-        // Helper: ensure user is collaborator
-        private bool IsCollaborator(CollaborationSession session, string userId) =>
-            session.Collaborators.Contains(userId);
-
-        // Helper: ensure user is leader
         private bool IsLeader(CollaborationSession session, string userId) =>
             session.LeaderId == userId;
 
-        //Retrieve similar problems and solutions from global knowledge base (RAG)
+        // ============================
+        // GLOBAL RAG ENDPOINT
+        // ============================
+
         [HttpGet("/api/knowledge/semantic-similar")]
         [AllowAnonymous]
         public async Task<IActionResult> GetSemanticSimilar(
-         [FromQuery] string query,
-         [FromQuery] string? domain,
-         [FromQuery] List<string>? tags)
+            [FromQuery] string query,
+            [FromQuery] string? domain,
+            [FromQuery] List<string>? tags)
         {
             if (string.IsNullOrWhiteSpace(query))
                 return BadRequest("Query is required");
 
             var embedding = _embedding.GenerateEmbedding(query);
+
             var results = await _globalKnowledge.FindSemanticSimilarAsync(
-                embedding,
-                10,
-                domain,
-                tags);
+                embedding, 10, domain, tags);
 
             var shaped = results.Select(r => new
             {
+                id = r.Id,
                 problem_summary = r.ProblemSummary,
                 solution_summary = r.SolutionSummary,
                 domain = r.Domain,
@@ -77,122 +69,16 @@ namespace RealistAPI.Controllers
                 confidence = r.Confidence,
                 approved_count = r.ApprovedCount,
                 optimized_count = r.OptimizedCount,
-                reused_count = r.ReusedCount
+                reused_count = r.ReusedCount,
+                created_at = r.CreatedAt
             });
-
 
             return Ok(shaped);
         }
 
-
-        // CREATE PROBLEM
-
-        [HttpPost]
-        public async Task<IActionResult> CreateProblem(
-            string sessionId,
-            [FromBody] CreateProblemRequest req)
-        {
-            var userId = GetUserId();
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!IsCollaborator(session, userId))
-                return Forbid("You are not a collaborator in this session");
-
-            var problem = new ProblemDocument
-            {
-                SessionId = sessionId,
-                CreatedByUserId = userId,
-                Description = req.Description,
-                Suggestions = req.Suggestions,
-                Domain = req.Domain,
-                Tags = req.Tags
-            };
-
-            await _problems.CreateAsync(problem);
-
-            if (session.ActiveProblemId == null)
-            {
-                session.ActiveProblemId = problem.Id;
-                await _sessions.UpdateAsync(session);
-            }
-
-            return Ok(problem);
-        }
-
-
-        // LIST PROBLEMS
-
-        [HttpGet]
-        public async Task<IActionResult> GetProblems(string sessionId)
-        {
-            var userId = GetUserId();
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!IsCollaborator(session, userId))
-                return Forbid();
-
-            var problems = await _problems.GetBySessionAsync(sessionId);
-            return Ok(problems);
-        }
-
-
-        // SET ACTIVE PROBLEM (Leader Only)
-
-        [HttpPost("{problemId}/set-active")]
-        public async Task<IActionResult> SetActiveProblem(string sessionId, string problemId)
-        {
-            var userId = GetUserId();
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!IsLeader(session, userId))
-                return Forbid("Only the session leader can set the active problem");
-
-            var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            session.ActiveProblemChanges.Add(new ActiveProblemChange
-            {
-                ProblemId = problemId,
-                ChangedByUserId = userId,
-                Timestamp = DateTime.UtcNow
-            });
-
-            session.ActiveProblemId = problemId;
-            await _sessions.UpdateAsync(session);
-
-            return Ok(new { ActiveProblemId = problemId });
-        }
-
-        [HttpGet("similar")] //retriv similar problems and solutions (RAG) 
-        public async Task<IActionResult> GetSimilarProblems(
-        string sessionId,
-        [FromQuery] string domain,
-         [FromQuery] List<string> tags)
-        {
-            var problems = await _problems.FindSimilarAsync(domain, tags, 10);
-
-            var result = problems.Select(p => new
-            {
-                summary = p.Description,
-                solution_summary = p.SolutionDocumentId != null
-                    ? "Solution exists" // or fetch best version summary
-                    : "No solution yet"
-            });
-
-            return Ok(result);
-        }
-
-        // RUN AI (Leader Only)
+        // ============================
+        // RUN AI
+        // ============================
 
         [HttpPost("{problemId}/run-ai")]
         public async Task<IActionResult> RunAiForProblem(string sessionId, string problemId)
@@ -204,11 +90,11 @@ namespace RealistAPI.Controllers
             if (session == null) return NotFound("Session not found");
 
             if (!IsLeader(session, userId))
-                return Forbid("Only the session leader can run AI");
+                return Forbid("Only leader can run AI");
 
             var problem = await _problems.GetByIdAsync(problemId);
             if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
+                return BadRequest("Invalid problem");
 
             var req = new ProblemReqDto
             {
@@ -220,6 +106,17 @@ namespace RealistAPI.Controllers
             };
 
             var aiResult = await _ai.RunPipelineAsync(req);
+
+            // 🔥 AUTO REUSE TRACKING (DEDUP SAFE)
+            var reuseIds = aiResult.RetrievedKnowledgeIds?
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct()
+                .ToList();
+
+            if (reuseIds?.Any() == true)
+            {
+                await _globalKnowledge.IncrementReusedBulkAsync(reuseIds);
+            }
 
             SolutionDocument solutionDoc;
 
@@ -241,6 +138,9 @@ namespace RealistAPI.Controllers
                 solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
             }
 
+            if (solutionDoc == null)
+                return StatusCode(500, "Solution document error");
+
             var version = new SolutionVersion
             {
                 Id = Guid.NewGuid().ToString(),
@@ -257,12 +157,15 @@ namespace RealistAPI.Controllers
                 DeepCacheHit = aiResult.DeepCacheHit,
                 RagCacheHit = aiResult.RagCacheHit,
                 ProblemKey = aiResult.ProblemKey,
-                RetrievedKnowledgeIds = aiResult.RetrievedKnowledgeIds ?? new List<string>()
+                RetrievedKnowledgeIds = reuseIds ?? new List<string>()
             };
 
             solutionDoc.Versions.Add(version);
             await _solutions.UpdateAsync(solutionDoc);
-            var knowledge = await _globalKnowledge.CreateAsync(new GlobalKnowledge
+
+            var embedding = _embedding.GenerateEmbedding(version.SolutionText);
+
+            var knowledge = new GlobalKnowledge
             {
                 ProblemId = problem.Id,
                 SessionId = sessionId,
@@ -274,7 +177,7 @@ namespace RealistAPI.Controllers
                 SolutionSummary = version.SolutionText,
                 DeepCore = aiResult.DeepCore,
 
-                SourceKnowledgeIds = aiResult.RetrievedKnowledgeIds ?? new List<string>(),
+                SourceKnowledgeIds = reuseIds ?? new List<string>(),
                 UsedRag = aiResult.UsedRag,
                 UsedDeep = aiResult.UsedDeep,
                 DeepCacheHit = aiResult.DeepCacheHit,
@@ -282,74 +185,18 @@ namespace RealistAPI.Controllers
 
                 Confidence = version.Confidence,
                 CreatedAt = DateTime.UtcNow,
+                Embedding = embedding,
                 Score = 0
-            });
-
-
-            return Ok(version);
-        }
-
-        [HttpPatch("{problemId}/edit")]
-        public async Task<IActionResult> EditSolution(
-        string sessionId,
-        string problemId,
-        [FromBody] EditSolutionRequest req)
-        {
-            var userId = GetUserId();
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!IsCollaborator(session, userId))
-                return Forbid("Only collaborators can edit the solution");
-
-            var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            if (problem.SolutionDocumentId == null)
-                return BadRequest("AI has not generated a solution yet");
-
-            var solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
-
-            var version = new SolutionVersion
-            {
-                Id = Guid.NewGuid().ToString(),
-                SolutionText = req.NewText,
-                Critique = "Manual edit",
-                Improvements = req.Comment,
-                Iteration = solutionDoc.Versions.Count + 1,
-                Confidence = 1.0,
-                Created_At = DateTime.UtcNow
             };
 
-            solutionDoc.Versions.Add(version);
-            await _solutions.UpdateAsync(solutionDoc);
+            await _globalKnowledge.CreateAsync(knowledge);
 
             return Ok(version);
         }
 
-
-        [HttpPost("{problemId}/ask-ai")]
-        public async Task<IActionResult> AskAi(
-        string sessionId,
-        string problemId,
-        [FromBody] ChatAiRequest req)
-        {
-            var userId = GetUserId();
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!IsCollaborator(session, userId))
-                return Forbid("Only collaborators can ask AI");
-
-            var aiResponse = await _ai.RunChatAsync(req.Message);
-
-            return Ok(new { response = aiResponse });
-        }
+        // ============================
+        // APPROVE AI
+        // ============================
 
         [HttpPost("{problemId}/approve-ai")]
         public async Task<IActionResult> ApproveAiSuggestion(
@@ -360,22 +207,14 @@ namespace RealistAPI.Controllers
             var userId = GetUserId();
             if (userId == null) return Unauthorized();
 
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!IsCollaborator(session, userId))
-                return Forbid("Only collaborators can approve AI suggestions");
-
             var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            if (problem.SolutionDocumentId == null)
-                return BadRequest("No solution exists yet");
+            if (problem == null) return NotFound();
 
             var solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
 
-            // Create new version from approved suggestion
+            if (solutionDoc == null)
+                return BadRequest("Solution document missing");
+
             var version = new SolutionVersion
             {
                 Id = Guid.NewGuid().ToString(),
@@ -390,8 +229,9 @@ namespace RealistAPI.Controllers
             solutionDoc.Versions.Add(version);
             await _solutions.UpdateAsync(solutionDoc);
 
-            // Store in global knowledge
-            var knowledge = await _globalKnowledge.CreateAsync(new GlobalKnowledge
+            var embedding = _embedding.GenerateEmbedding(version.SolutionText);
+
+            var knowledge = new GlobalKnowledge
             {
                 ProblemId = problem.Id,
                 SessionId = sessionId,
@@ -400,55 +240,44 @@ namespace RealistAPI.Controllers
 
                 ProblemSummary = problem.Description,
                 SolutionSummary = version.SolutionText,
-                Confidence = version.Confidence,
+                Confidence = 1.0,
                 CreatedAt = DateTime.UtcNow,
 
-                // No AI pipeline here, so no deepcore/rag metadata
+                Embedding = embedding,
                 SourceKnowledgeIds = new List<string>(),
+
                 UsedRag = false,
                 UsedDeep = false,
                 DeepCacheHit = false,
                 RagCacheHit = false,
                 Score = 0
-            });
+            };
 
-            // Increment approval for THIS knowledge entry
+            await _globalKnowledge.CreateAsync(knowledge);
             await _globalKnowledge.IncrementApprovedAsync(knowledge.Id);
 
             return Ok(version);
         }
 
-
+        // ============================
+        // OPTIMIZE
+        // ============================
 
         [HttpPost("{problemId}/optimize")]
         public async Task<IActionResult> OptimizeSolution(
-        string sessionId,
-        string problemId,
-        [FromBody] FeedbackDto feedback)
+            string sessionId,
+            string problemId,
+            [FromBody] FeedbackDto feedback)
         {
-            var userId = GetUserId();
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!IsCollaborator(session, userId))
-                return Forbid("Only collaborators can optimize the solution");
-
             var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            if (problem.SolutionDocumentId == null)
-                return BadRequest("No solution exists yet");
+            if (problem == null) return NotFound();
 
             var solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
-            var currentVersion = solutionDoc.Versions.LastOrDefault();
+            var currentVersion = solutionDoc?.Versions.LastOrDefault();
 
             if (currentVersion == null)
-                return BadRequest("No versions exist for this solution");
+                return BadRequest("No existing solution");
 
-            // Build AI request using feedback
             var aiReq = new ProblemReqDto
             {
                 SessionId = sessionId,
@@ -459,6 +288,17 @@ namespace RealistAPI.Controllers
             };
 
             var aiResult = await _ai.RunPipelineAsync(aiReq);
+
+            // 🔥 AUTO REUSE TRACKING
+            var reuseIds = aiResult.RetrievedKnowledgeIds?
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct()
+                .ToList();
+
+            if (reuseIds?.Any() == true)
+            {
+                await _globalKnowledge.IncrementReusedBulkAsync(reuseIds);
+            }
 
             var newVersion = new SolutionVersion
             {
@@ -476,15 +316,15 @@ namespace RealistAPI.Controllers
                 DeepCacheHit = aiResult.DeepCacheHit,
                 RagCacheHit = aiResult.RagCacheHit,
                 ProblemKey = aiResult.ProblemKey,
-                RetrievedKnowledgeIds = aiResult.RetrievedKnowledgeIds ?? new List<string>()
+                RetrievedKnowledgeIds = reuseIds ?? new List<string>()
             };
-
-
 
             solutionDoc.Versions.Add(newVersion);
             await _solutions.UpdateAsync(solutionDoc);
-            
-            await _globalKnowledge.CreateAsync(new GlobalKnowledge
+
+            var embedding = _embedding.GenerateEmbedding(newVersion.SolutionText);
+
+            var knowledge = new GlobalKnowledge
             {
                 ProblemId = problem.Id,
                 SessionId = sessionId,
@@ -496,165 +336,22 @@ namespace RealistAPI.Controllers
                 SolutionSummary = newVersion.SolutionText,
                 DeepCore = aiResult.DeepCore,
 
-                SourceKnowledgeIds = aiResult.RetrievedKnowledgeIds ?? new List<string>(),
+                SourceKnowledgeIds = reuseIds ?? new List<string>(),
                 UsedRag = aiResult.UsedRag,
                 UsedDeep = aiResult.UsedDeep,
                 DeepCacheHit = aiResult.DeepCacheHit,
                 RagCacheHit = aiResult.RagCacheHit,
+
                 Confidence = newVersion.Confidence,
                 CreatedAt = DateTime.UtcNow,
+                Embedding = embedding,
                 Score = 0
-            });
-            await _globalKnowledge.IncrementOptimizedAsync(problem.Id);
+            };
 
+            await _globalKnowledge.CreateAsync(knowledge);
+            await _globalKnowledge.IncrementOptimizedAsync(knowledge.Id);
 
             return Ok(newVersion);
         }
-
-        [HttpGet("{problemId}/solution")]
-        public async Task<IActionResult> GetLatestSolution(string sessionId, string problemId)
-        {
-            var userId = User.FindFirst("sub")?.Value;
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!session.Collaborators.Contains(userId))
-                return Forbid();
-
-            var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            if (problem.SolutionDocumentId == null)
-                return Ok(new { message = "No solution yet" });
-
-            var solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
-            var latest = solutionDoc.Versions.LastOrDefault();
-
-            return Ok(latest);
-        }
-
-
-        [HttpGet("{problemId}/versions")]
-        public async Task<IActionResult> GetSolutionVersions(string sessionId, string problemId)
-        {
-            var userId = User.FindFirst("sub")?.Value;
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!session.Collaborators.Contains(userId))
-                return Forbid();
-
-            var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            if (problem.SolutionDocumentId == null)
-                return Ok(new List<SolutionVersion>());
-
-            var solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
-
-            return Ok(solutionDoc.Versions);
-        }
-
-
-    [HttpGet("{problemId}/versions/{versionId}")]
-        public async Task<IActionResult> GetSolutionVersion(
-    string sessionId,
-    string problemId,
-    string versionId)
-        {
-            var userId = User.FindFirst("sub")?.Value;
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!session.Collaborators.Contains(userId))
-                return Forbid();
-
-            var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            if (problem.SolutionDocumentId == null)
-                return NotFound("No solution exists");
-
-            var solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
-            var version = solutionDoc.Versions.FirstOrDefault(v => v.Id == versionId);
-
-            return version == null ? NotFound() : Ok(version);
-        }
-
-        [HttpGet("{problemId}/full")]
-        public async Task<IActionResult> GetProblemWithSolution(string sessionId, string problemId)
-        {
-            var userId = User.FindFirst("sub")?.Value;
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!session.Collaborators.Contains(userId))
-                return Forbid();
-
-            var problem = await _problems.GetByIdAsync(problemId);
-            if (problem == null || problem.SessionId != sessionId)
-                return BadRequest("Problem does not belong to this session");
-
-            SolutionVersion? latest = null;
-
-            if (problem.SolutionDocumentId != null)
-            {
-                var solutionDoc = await _solutions.GetByIdAsync(problem.SolutionDocumentId);
-                latest = solutionDoc.Versions.LastOrDefault();
-            }
-
-            return Ok(new
-            {
-                problem,
-                latestSolution = latest
-            });
-        }
-        public class MarkReusedRequest
-        {
-            public string KnowledgeId { get; set; }
-        }
-
-        [HttpPost("{problemId}/mark-reused")]
-        public async Task<IActionResult> MarkSolutionReused(
-            string sessionId,
-            string problemId,
-            [FromBody] MarkReusedRequest req)
-        {
-            var userId = User.FindFirst("sub")?.Value;
-            if (userId == null) return Unauthorized();
-
-            var session = await _sessions.GetByIdAsync(sessionId);
-            if (session == null) return NotFound("Session not found");
-
-            if (!session.Collaborators.Contains(userId))
-                return Forbid();
-
-            await _globalKnowledge.IncrementReusedAsync(req.KnowledgeId);
-            return Ok(new { message = "Marked as reused" });
-        }
-
-
-
-
     }
 }
-
-
-
-
-
-
-
-
-

@@ -12,22 +12,19 @@ namespace RealistAPI.Repositories
         {
             _collection = db.GetCollection<GlobalKnowledge>("GlobalKnowledge");
         }
+
         public async Task<GlobalKnowledge> CreateAsync(GlobalKnowledge doc)
         {
             await _collection.InsertOneAsync(doc);
             return doc;
         }
 
-
         public async Task<List<GlobalKnowledge>> FindSemanticSimilarAsync(
-    List<double> embedding,
-    int limit = 10,
-    string? domain = null,
-    List<string>? tags = null)
+            List<double> embedding,
+            int limit = 10,
+            string? domain = null,
+            List<string>? tags = null)
         {
-            if (embedding == null || embedding.Count == 0)
-                return new List<GlobalKnowledge>();
-
             var filter = Builders<GlobalKnowledge>.Filter.Empty;
 
             if (!string.IsNullOrWhiteSpace(domain))
@@ -37,12 +34,10 @@ namespace RealistAPI.Repositories
                 filter &= Builders<GlobalKnowledge>.Filter.AnyIn(x => x.Tags, tags);
 
             var candidates = await _collection.Find(filter).ToListAsync();
-            if (!candidates.Any())
-                return candidates;
+            if (!candidates.Any()) return candidates;
 
             static double Cosine(List<double> a, List<double> b)
             {
-                if (a == null || b == null || a.Count != b.Count) return 0.0;
                 double dot = 0, na = 0, nb = 0;
                 for (int i = 0; i < a.Count; i++)
                 {
@@ -50,24 +45,33 @@ namespace RealistAPI.Repositories
                     na += a[i] * a[i];
                     nb += b[i] * b[i];
                 }
-                if (na == 0 || nb == 0) return 0.0;
-                return dot / (Math.Sqrt(na) * Math.Sqrt(nb));
+                return (na == 0 || nb == 0) ? 0.0 : dot / (Math.Sqrt(na) * Math.Sqrt(nb));
             }
 
-            static double Quality(GlobalKnowledge x)
+            // DYNAMIC WEIGHTS
+            static double AdaptiveScore(GlobalKnowledge x, double similarity)
             {
-                double score =
+                double reuseWeight = 0.35 + Math.Min(x.ReusedCount / 50.0, 0.25);
+                double approvalWeight = 0.25;
+                double confidenceWeight = 0.20;
+                double freshnessWeight = 0.10;
+                double similarityWeight = 1.0 - (reuseWeight + approvalWeight + confidenceWeight + freshnessWeight);
+
+                double quality =
+                    Math.Log(1 + x.ReusedCount) * 2.5 +
                     Math.Log(1 + x.ApprovedCount) * 2.0 +
-                    Math.Log(1 + x.ReusedCount) * 3.0 +
-                    Math.Log(1 + x.OptimizedCount) * 1.0;
+                    Math.Log(1 + x.OptimizedCount) * 1.5;
 
-                return Math.Min(score / 10.0, 1.0); // normalize 0–1
-            }
+                double confidence = x.Confidence ?? 0.5;
 
-            static double Freshness(GlobalKnowledge x)
-            {
                 var days = (DateTime.UtcNow - x.CreatedAt).TotalDays;
-                return Math.Exp(-days / 30.0); // 30‑day half‑life
+                double freshness = Math.Exp(-days / 30.0);
+
+                return
+                    (similarity * similarityWeight) +
+                    (quality * reuseWeight / 10.0) +
+                    (confidence * confidenceWeight) +
+                    (freshness * freshnessWeight);
             }
 
             return candidates
@@ -75,79 +79,63 @@ namespace RealistAPI.Repositories
                 .Select(x => new
                 {
                     Item = x,
-                    Similarity = Cosine(embedding, x.Embedding),
-                    Quality = Quality(x),
-                    Freshness = Freshness(x)
+                    Similarity = Cosine(embedding, x.Embedding)
                 })
-                .OrderByDescending(x =>
-                    (x.Similarity * 0.70) +
-                    (x.Quality * 0.20) +
-                    (x.Freshness * 0.10))
+                .Select(x => new
+                {
+                    x.Item,
+                    Score = AdaptiveScore(x.Item, x.Similarity)
+                })
+                .OrderByDescending(x => x.Score)
                 .Take(limit)
                 .Select(x => x.Item)
                 .ToList();
         }
 
-        public async Task IncrementApprovedAsync(string knowledgeId)
+        public async Task IncrementApprovedAsync(string id)
         {
-            var filter = Builders<GlobalKnowledge>.Filter.Eq(x => x.Id, knowledgeId);
-            var update = Builders<GlobalKnowledge>.Update.Inc(x => x.ApprovedCount, 1);
-            await _collection.UpdateOneAsync(filter, update);
+            await _collection.UpdateOneAsync(
+                x => x.Id == id,
+                Builders<GlobalKnowledge>.Update.Inc(x => x.ApprovedCount, 1));
         }
 
-        public async Task IncrementOptimizedAsync(string knowledgeId)
+        public async Task IncrementOptimizedAsync(string id)
         {
-            var filter = Builders<GlobalKnowledge>.Filter.Eq(x => x.Id, knowledgeId);
-            var update = Builders<GlobalKnowledge>.Update.Inc(x => x.OptimizedCount, 1);
-            await _collection.UpdateOneAsync(filter, update);
+            await _collection.UpdateOneAsync(
+                x => x.Id == id,
+                Builders<GlobalKnowledge>.Update.Inc(x => x.OptimizedCount, 1));
         }
 
-        public async Task IncrementReusedAsync(string knowledgeId)
+        //  BULK REUSE (KEY FEATURE)
+        public async Task IncrementReusedBulkAsync(List<string> ids)
         {
-            var filter = Builders<GlobalKnowledge>.Filter.Eq(x => x.Id, knowledgeId);
-            var update = Builders<GlobalKnowledge>.Update.Inc(x => x.ReusedCount, 1);
-            await _collection.UpdateOneAsync(filter, update);
+            if (ids == null || ids.Count == 0) return;
+
+            var filter = Builders<GlobalKnowledge>.Filter.In(x => x.Id, ids);
+
+            await _collection.UpdateManyAsync(
+                filter,
+                Builders<GlobalKnowledge>.Update.Inc(x => x.ReusedCount, 1));
         }
 
         public async Task<List<GlobalKnowledge>> GetTrendingAsync(int limit = 20)
         {
-            var all = await _collection.Find(Builders<GlobalKnowledge>.Filter.Empty).ToListAsync();
-
-            return all
-                .OrderByDescending(x =>
-                    (x.ReusedCount * 3) +
-                    (x.ApprovedCount * 2) +
-                    (x.OptimizedCount * 1) +
-                    (x.Confidence ?? 0))
-                .Take(limit)
-                .ToList();
+            return await _collection.Find(_ => true)
+                .SortByDescending(x => x.ReusedCount + x.ApprovedCount * 2)
+                .Limit(limit)
+                .ToListAsync();
         }
+
         public async Task<object> GetStatsAsync()
         {
-            var all = await _collection.Find(Builders<GlobalKnowledge>.Filter.Empty).ToListAsync();
-
-            var total = all.Count;
-
-            var byDomain = all
-                .GroupBy(x => x.Domain ?? "unknown")
-                .Select(g => new { domain = g.Key, count = g.Count() })
-                .ToList();
-
-            var topTags = all
-                .SelectMany(x => x.Tags ?? new List<string>())
-                .GroupBy(t => t)
-                .OrderByDescending(g => g.Count())
-                .Take(20)
-                .Select(g => new { tag = g.Key, count = g.Count() })
-                .ToList();
+            var total = await _collection.CountDocumentsAsync(_ => true);
+            var reused = await _collection.CountDocumentsAsync(x => x.ReusedCount > 0);
 
             return new
             {
-                totalEntries = total,
-                byDomain,
-                topTags
+                total,
+                reused
             };
         }
-
     }
 }
