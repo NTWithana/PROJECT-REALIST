@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RealistAPI.Interfaces;
 using RealistAPI.Models;
+using System.Security.Claims;
 
 using static FeedbackDto;
 
@@ -35,7 +36,8 @@ namespace RealistAPI.Controllers
             _embedding = embedding;
         }
 
-        private string? GetUserId() => User.FindFirst("sub")?.Value;
+        private string? GetUserId() => User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+;
 
         private bool IsLeader(CollaborationSession session, string userId) =>
             session.LeaderId == userId;

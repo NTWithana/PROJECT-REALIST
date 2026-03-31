@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using RealistAPI.Interfaces;
 using RealistAPI.Models;
+using System.Security.Claims;
 using static FeedbackDto;
 
 namespace RealistAPI.Controllers
@@ -30,7 +31,7 @@ namespace RealistAPI.Controllers
         [Authorize]
         public async Task<IActionResult> CreateSession([FromBody] CreateSessionRequest req)
         {
-            var userId = User.FindFirst("sub")?.Value;
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (userId == null) return Unauthorized();
 
             var session = new CollaborationSession
@@ -53,7 +54,7 @@ namespace RealistAPI.Controllers
         [Authorize]
         public async Task<IActionResult> AddMessage(string id, [FromBody] string content)
         {
-            var userId = User.FindFirst("sub")?.Value;
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (userId == null) return Unauthorized();
 
             var session = await _sessions.GetByIdAsync(id);
@@ -93,7 +94,7 @@ namespace RealistAPI.Controllers
             string sessionId,
             [FromBody] InviteCollaboratorRequest req)
         {
-            var userId = User.FindFirst("sub")?.Value;
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (userId == null) return Unauthorized();
 
             var session = await _sessions.GetByIdAsync(sessionId);
@@ -125,7 +126,7 @@ namespace RealistAPI.Controllers
         [Authorize]
         public async Task<IActionResult> GetMySessions()
         {
-            var userId = User.FindFirst("sub")?.Value;
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (userId == null) return Unauthorized();
 
             var allSessions = await _sessions.GetAllAsync();
@@ -144,7 +145,7 @@ namespace RealistAPI.Controllers
         [Authorize]
         public async Task<IActionResult> GetTimeline(string id)
         {
-            var userId = User.FindFirst("sub")?.Value;
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (userId == null) return Unauthorized();
 
             var session = await _sessions.GetByIdAsync(id);
@@ -206,7 +207,7 @@ namespace RealistAPI.Controllers
         [Authorize]
         public async Task<IActionResult> GetConsistency(string id)
         {
-            var userId = User.FindFirst("sub")?.Value;
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             if (userId == null) return Unauthorized();
 
             var session = await _sessions.GetByIdAsync(id);

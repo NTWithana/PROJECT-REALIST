@@ -95,6 +95,7 @@ builder.Services.AddScoped<ISessionRepository, SessionRepository>();
 builder.Services.AddScoped<IProblemRepository, ProblemRepository>();
 builder.Services.AddScoped<ISolutionRepository, SolutionRepository>();
 builder.Services.AddScoped<IGlobalKnowledgeRepository, GlobalKnowledgeRepository>();
+builder.Services.AddScoped<IChatSignalRepository, ChatSignalRepository>();
 
 // AI Engine
 builder.Services.AddHttpClient<IAiEngineService, AiEngineService>();
