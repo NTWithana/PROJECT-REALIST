@@ -1,10 +1,11 @@
 import os
 import re
+import json
 import hashlib
 import logging
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, List
 
 import httpx
 from dotenv import load_dotenv
@@ -13,127 +14,80 @@ from Models import ProblemReq, Finalresult
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-
-# CONFIG
-
 CACHE_TTL = timedelta(hours=6)
 RAG_TTL = timedelta(hours=2)
 
 CONF_SKIP_DEEP = 0.70
-CONF_MIN_REFINE = 0.55
-
 MAX_CACHE_SIZE = 500
 
 DEEP_CACHE: Dict[str, Dict[str, Any]] = {}
 RAG_CACHE: Dict[str, Dict[str, Any]] = {}
 
-# Prevent deep overload
-DEEP_LIMIT = asyncio.Semaphore(3)
-
-
-# MODEL STUBS
+# MODELS 
 
 async def flash_chat(prompt: str) -> str:
-    return f"[Gemini-Flash] {prompt[:1200]}"
+    return f"[Flash] {prompt[:1200]}"
 
 async def deepseek_reasoner(prompt: str) -> str:
-    return f"[DeepSeek-Reasoner] {prompt[:2000]}"
+    return f"[Deep] {prompt[:2000]}"
 
-
-# SAFE CALL
-
-async def safe_call(fn, *args, timeout=8):
+async def safe_call(fn, *args, timeout=10):
     try:
         return await asyncio.wait_for(fn(*args), timeout=timeout)
     except Exception as e:
-        logger.error(f"{fn.__name__} failed: {e}")
+        logger.error(f"Model error: {e}")
         return ""
 
+#  UTILS 
 
-# UTILITIES
-
-def now() -> datetime:
+def now():
     return datetime.utcnow()
 
-def trim(text: str, limit: int = 800) -> str:
+def trim(text, limit=800):
     return (text or "")[:limit]
 
-def cache_key(problem: ProblemReq, intent: str) -> str:
-    raw = f"{problem.description}-{getattr(problem,'domain',None)}-{getattr(problem,'tags',None)}-{intent}"
+def cache_key(problem: ProblemReq):
+    raw = f"{problem.description}-{getattr(problem,'domain',None)}-{getattr(problem,'tags',None)}"
     return hashlib.md5(raw.encode()).hexdigest()
 
-def is_fresh(ts: datetime, ttl: timedelta) -> bool:
+def is_fresh(ts, ttl):
     return (now() - ts) < ttl
 
-def clamp01(x: float) -> float:
+def clamp01(x):
     return max(0.0, min(1.0, x))
 
-def parse_confidence(raw: str) -> float:
+def parse_confidence(raw):
     m = re.search(r"(0(?:\.\d+)?|1(?:\.0+)?)", raw or "")
     return clamp01(float(m.group(1))) if m else 0.6
 
-def evict_if_needed(cache: Dict):
+def evict_if_needed(cache):
     if len(cache) > MAX_CACHE_SIZE:
         oldest = sorted(cache.items(), key=lambda x: x[1]["ts"])[0][0]
         cache.pop(oldest, None)
 
+def is_complex(text):
+    t = text.lower()
+    return len(t) > 300 or any(k in t for k in ["architecture","distributed","pipeline","rag"])
 
-# MERGED FLASH GENERATION + CONFIDENCE 
+def clean_ids(ids):
+    return [x for x in ids if x and isinstance(x, str)]
 
-async def flash_generate_with_conf(prompt: str):
-    full_prompt = f"""
-Answer the problem AND give confidence.
+# ANALYSIS 
+async def analyze_problem(text):
+    raw = await safe_call(flash_chat, text)
+    return "solve", True  # simplified fallback-safe
 
-FORMAT:
-ANSWER:
-<your answer>
+# RAG
 
-CONFIDENCE:
-<number between 0 and 1>
-
-PROBLEM:
-{prompt}
-"""
-    raw = await safe_call(flash_chat, full_prompt)
-
-    answer = raw.split("CONFIDENCE:")[0].replace("ANSWER:", "").strip()
-    conf = parse_confidence(raw)
-
-    return answer, conf
-
-
-# FLASH ANALYSIS
-
-async def analyze_problem(text: str):
-    prompt = f"""
-Return JSON only:
-{{"intent":"solve|build|fix|research|analyze|plan|create|learn|explore|decide","use_rag":true|false}}
-
-TEXT:
-{text}
-"""
-    raw = await safe_call(flash_chat, prompt)
-
-    intent = re.search(r'"intent"\s*:\s*"(\w+)"', raw)
-    rag = re.search(r'"use_rag"\s*:\s*(true|false)', raw)
-
-    return (
-        intent.group(1) if intent else "solve",
-        rag.group(1) == "true" if rag else False
-    )
-
-
-# RAG (improved signal)
-
-async def retrieve_rag(problem: ProblemReq, intent: str, use_rag: bool) -> str:
+async def retrieve_rag(problem, use_rag):
     if not use_rag:
-        return ""
+        return "", []
 
-    key = cache_key(problem, intent)
+    key = cache_key(problem)
     cached = RAG_CACHE.get(key)
 
     if cached and is_fresh(cached["ts"], RAG_TTL):
-        return cached["data"]
+        return cached["data"], cached["ids"]
 
     try:
         async with httpx.AsyncClient(timeout=6.0) as client:
@@ -143,132 +97,90 @@ async def retrieve_rag(problem: ProblemReq, intent: str, use_rag: bool) -> str:
             )
 
             if res.status_code != 200:
-                return ""
+                return "", []
 
-            data = res.json()[:5]
+            data = sorted(
+                res.json(),
+                key=lambda x: (x.get("reused_count", 0)*2 + x.get("approved_count", 0)),
+                reverse=True
+            )[:10]
 
-            raw_context = "\n".join([
-                f"- Problem: {x.get('problem_summary','')}\n  Solution: {x.get('solution_summary','')}"
-                for x in data
-            ])
+            ids = []
+            lines = []
 
-            # 🔥 compress RAG (Fix #3)
-            context = await safe_call(flash_chat, f"Summarize key insights:\n{raw_context}")
+            for x in data:
+                kid = x.get("id")
+                if kid:
+                    ids.append(kid)
 
-            RAG_CACHE[key] = {"data": context, "ts": now()}
+                lines.append(
+                    f"- ID:{kid} | Reuse:{x.get('reused_count',0)} | Approved:{x.get('approved_count',0)}\n"
+                    f"  {x.get('solution_summary','')}"
+                )
+
+            context = "\n".join(lines)
+
+            RAG_CACHE[key] = {"data": context, "ids": ids, "ts": now()}
             evict_if_needed(RAG_CACHE)
 
-            return context
+            return context, ids
 
     except Exception as e:
         logger.error(f"RAG error: {e}")
-        return ""
+        return "", []
 
+# DEEP 
 
-# DEEP CORE (throttled)
+async def get_deep(problem, cleaned, context):
+    raw = await safe_call(deepseek_reasoner, cleaned + context)
 
-async def get_deep_core(problem: ProblemReq, cleaned: str, context: str, intent: str) -> str:
-    key = cache_key(problem, intent)
-    cached = DEEP_CACHE.get(key)
+    try:
+        return json.loads(raw)
+    except:
+        return {"core": raw, "used_knowledge_ids": []}
 
-    if cached and is_fresh(cached["ts"], CACHE_TTL):
-        return cached["data"]
-
-    prompt = f"""
-Deep reasoning.
-
-INTENT: {intent}
-
-PROBLEM:
-{cleaned}
-
-CONTEXT:
-{context}
-
-Be structured, correct, and practical.
-"""
-
-    async with DEEP_LIMIT:
-        result = await safe_call(deepseek_reasoner, prompt)
-
-    DEEP_CACHE[key] = {"data": result, "ts": now()}
-    evict_if_needed(DEEP_CACHE)
-
-    return result
-
-
-# PIPELINE
+# PIPELINE 
 
 async def hive_pipeline(problem: ProblemReq):
     cleaned = trim(problem.description)
 
     intent, use_rag = await analyze_problem(cleaned)
+    context, retrieved_ids = await retrieve_rag(problem, use_rag)
 
-    context = await retrieve_rag(problem, intent, use_rag)
+    draft = await safe_call(flash_chat, cleaned + context)
 
-    # Step 1 — Draft + confidence (merged)
-    draft, conf = await flash_generate_with_conf(f"{cleaned}\n{context}")
+    conf = parse_confidence(await safe_call(flash_chat, draft))
 
-    # Step 2 — Deep decision
-    if conf >= CONF_SKIP_DEEP:
+    if conf >= CONF_SKIP_DEEP and not is_complex(cleaned):
         core = draft
-        used_deep = False
+        used_ids = []
     else:
-        core = await get_deep_core(problem, cleaned, context, intent)
-        used_deep = True
+        deep = await get_deep(problem, cleaned, context)
+        core = deep.get("core") or draft
+        used_ids = deep.get("used_knowledge_ids") or retrieved_ids
 
-    # Step 3 — Conditional refinement (Fix #2)
-    if conf < CONF_MIN_REFINE:
-        critique = await safe_call(flash_chat, f"Critique:\n{core}")
-        improvements = await safe_call(flash_chat, f"Improve:\n{core}\n{critique}")
-    else:
-        critique = ""
-        improvements = ""
+    final = await safe_call(flash_chat, core)
 
-    # Step 4 — Final synthesis
-    final = await safe_call(flash_chat, f"""
-FINAL ANSWER:
+    final_conf = clamp01(max(conf, parse_confidence(await safe_call(flash_chat, final))))
 
-{core}
+    return final, final_conf, {
+        "used_ids": clean_ids(used_ids),
+        "intent": intent,
+        "used_rag": use_rag,
+        "used_deep": conf < CONF_SKIP_DEEP
+    }
 
-CRITIQUE:
-{critique}
-
-IMPROVEMENTS:
-{improvements}
-
-Produce best structured answer.
-""")
-
-    # Final confidence update (Fix #6)
-    final_conf = parse_confidence(await safe_call(flash_chat, f"Score 0-1:\n{final}"))
-
-    return final, clamp01(max(conf, final_conf))
-
-
-# ENTRY
+# ENTRY 
 
 async def AIpipeline(problem: ProblemReq) -> Finalresult:
-    try:
-        final, confidence = await hive_pipeline(problem)
+    final, confidence, meta = await hive_pipeline(problem)
 
-        return Finalresult(
-            Status="ok",
-            OptimisedSolution=final,
-            Confidence=confidence,
-            Rationale="Optimized hybrid pipeline (cost-efficient, gated deep reasoning, RAG-aware)",
-            Iteration=1,
-            Created_At=now()
-        )
-
-    except Exception as e:
-        logger.error(f"Pipeline failed: {e}")
-
-        return Finalresult(
-            Status="error",
-            OptimisedSolution="Something went wrong.",
-            Confidence=0.3,
-            Rationale=str(e),
-            Iteration=0,
-            Created_At=now()
-        )
+    return Finalresult(
+        Status="ok",
+        OptimisedSolution=final,
+        Confidence=confidence,
+        Rationale=f"intent={meta['intent']} | rag={meta['used_rag']}",
+        Iteration=1,
+        Created_At=now(),
+        RetrievedKnowledgeIds=meta["used_ids"]
+    )

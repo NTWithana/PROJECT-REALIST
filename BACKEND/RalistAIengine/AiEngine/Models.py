@@ -21,3 +21,12 @@ class Finalresult(BaseModel):
     Rationale: Optional[str] = None
     Iteration: int = Field(default=1)
     Created_At: datetime = Field(default_factory=datetime.utcnow)
+
+    # Hybrid artifacts
+    DeepCore: Optional[str] = None
+    UsedRag: bool = False
+    UsedDeep: bool = False
+    DeepCacheHit: bool = False
+    RagCacheHit: bool = False
+    ProblemKey: Optional[str] = None
+    RetrievedKnowledgeIds: List[str] = Field(default_factory=list)
