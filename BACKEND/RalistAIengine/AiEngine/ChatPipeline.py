@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 try:
     from redis.asyncio import Redis
 except Exception:
-    Redis = None  # type: ignore
+    Redis = None  
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -25,8 +25,8 @@ logger = logging.getLogger(__name__)
 REALIST_API_URL = os.getenv("REALIST_API_URL", "").rstrip("/")
 
 # ChatSignals endpoints in RealistAPI
-CHAT_SIGNALS_WRITE_URL = os.getenv("REALIST_CHAT_SIGNALS_WRITE_URL", "").rstrip("/")  # e.g. https://.../api/chat-signals
-CHAT_SIGNALS_SEARCH_URL = os.getenv("REALIST_CHAT_SIGNALS_SEARCH_URL", "").rstrip("/")  # e.g. https://.../api/chat-signals/semantic-similar
+CHAT_SIGNALS_WRITE_URL = os.getenv("REALIST_CHAT_SIGNALS_WRITE_URL", "").rstrip("/")  
+CHAT_SIGNALS_SEARCH_URL = os.getenv("REALIST_CHAT_SIGNALS_SEARCH_URL", "").rstrip("/")  
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REDIS_PREFIX = os.getenv("REDIS_PREFIX", "realist").strip()
@@ -408,7 +408,7 @@ async def chat_pipeline(
     msg = trim(redact_private_bits(message or ""), MAX_MSG_CHARS)
     tags = tags or []
 
-    # Redis response cache (big cost saver)
+    # Redis response cache                                          
     cache_key = f"{REDIS_PREFIX}:chat:final:{stable_key(mode, domain, ','.join(tags), msg)}"
     cached = await redis_get_json(cache_key)
     if cached and isinstance(cached, dict) and cached.get("out"):
