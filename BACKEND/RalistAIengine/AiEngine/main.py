@@ -13,9 +13,6 @@ from Models import ProblemReq, Finalresult
 
 from redis_cache import RedisCache
 
-
-# APP
-
 AiEngine = FastAPI(
     title="Realist AI Engine",
     version="1.0.0",
@@ -23,25 +20,26 @@ AiEngine = FastAPI(
 )
 
 
-# CORS (LOCK DOWN)
+# CORS (LOCKED DOWN)
 
-# Render: set ALLOWED_ORIGINS="https://your-frontend.com,https://your-admin.com"
-allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+allowed_origins = [
+    "https://project-realist-frontend.onrender.com",
+    "https://project-realist.onrender.com"
+]
 
 AiEngine.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins if allowed_origins else [],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
 
-# SIMPLE RATE LIMIT (EDGE-SAFE)
+# RATE LIMITING
 
-# For production-grade, do Redis-based rate limiting later.
 RATE_LIMIT_RPM = int(os.getenv("RATE_LIMIT_RPM", "120"))
-_window = {}  # {ip: (window_start_epoch_minute, count)}
+_window = {}
 
 @AiEngine.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
@@ -64,7 +62,7 @@ async def rate_limit_middleware(request: Request, call_next):
     return resp
 
 
-# REDIS CACHE (shared)
+# REDIS CACHE
 
 cache = RedisCache()
 
@@ -74,14 +72,16 @@ async def _startup():
 
 @AiEngine.on_event("shutdown")
 async def _shutdown():
-    await cache.close()
+    if cache.client:
+        await cache.client.close()
 
-# CHAT MODELS
+
+# MODELS
 
 class ChatRequest(BaseModel):
     message: constr(min_length=1, max_length=2000)
     domain: str = "general"
-    tags: List[str] = Field(default_factory=list, max_length=30)
+    tags: List[str] = Field(default_factory=list)
     sessionId: Optional[str] = None
     userId: Optional[str] = None
 
@@ -91,29 +91,26 @@ class ChatResponse(BaseModel):
     mode: Optional[str] = None
     intent: Optional[str] = None
     model_used: Optional[str] = None
-
     used_global_rag: bool = False
     used_chat_signals: bool = False
     global_rag_cache_hit: bool = False
     chat_signals_cache_hit: bool = False
-
-    retrieved_global_knowledge_ids: List[str] = Field(default_factory=list)
-    retrieved_chat_signal_ids: List[str] = Field(default_factory=list)
-
+    retrieved_global_knowledge_ids: List[str] = []
+    retrieved_chat_signal_ids: List[str] = []
     wrote_signal: bool = False
     signal_ref: Optional[str] = None
     cache_hit: bool = False
 
-# -------------------------
+
 # SOLVER ENDPOINT
-# -------------------------
+
 @AiEngine.post("/run-pipeline", response_model=Finalresult)
 async def run_pipeline(problem: ProblemReq):
     return await AIpipeline(problem)
 
-# -------------------------
+
 # CHAT ENDPOINTS
-# -------------------------
+
 @AiEngine.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     out = await chat_pipeline(
@@ -123,7 +120,6 @@ async def chat(req: ChatRequest):
         tags=req.tags,
         session_id=req.sessionId,
         user_id=req.userId,
-        cache=cache,  # <--- pass redis cache
     )
     return ChatResponse(**out)
 
@@ -136,7 +132,6 @@ async def hub(req: ChatRequest):
         tags=req.tags,
         session_id=req.sessionId,
         user_id=req.userId,
-        cache=cache,
     )
     return ChatResponse(**out)
 
@@ -149,7 +144,6 @@ async def supervision(req: ChatRequest):
         tags=req.tags,
         session_id=req.sessionId,
         user_id=req.userId,
-        cache=cache,
     )
     return ChatResponse(**out)
 
