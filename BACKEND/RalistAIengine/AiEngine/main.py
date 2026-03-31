@@ -1,16 +1,20 @@
 import os
+import time
 import uvicorn
-from fastapi import FastAPI
-from pydantic import BaseModel
 from typing import List, Optional
 
-from Aipipeline import AIpipeline          # Solver engine (workspace)
-from ChatPipeline import chat_pipeline     # Chat / Hub / Supervision engine
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, constr
+
+from Aipipeline import AIpipeline
+from ChatPipeline import chat_pipeline
 from Models import ProblemReq, Finalresult
 
+from redis_cache import RedisCache
 
-# FASTAPI APP
 
+# APP
 
 AiEngine = FastAPI(
     title="Realist AI Engine",
@@ -19,13 +23,65 @@ AiEngine = FastAPI(
 )
 
 
+# CORS (LOCK DOWN)
+
+# Render: set ALLOWED_ORIGINS="https://your-frontend.com,https://your-admin.com"
+allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+
+AiEngine.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins if allowed_origins else [],
+    allow_credentials=True,
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+
+# SIMPLE RATE LIMIT (EDGE-SAFE)
+
+# For production-grade, do Redis-based rate limiting later.
+RATE_LIMIT_RPM = int(os.getenv("RATE_LIMIT_RPM", "120"))
+_window = {}  # {ip: (window_start_epoch_minute, count)}
+
+@AiEngine.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    ip = request.client.host if request.client else "unknown"
+    now_min = int(time.time() // 60)
+
+    win, count = _window.get(ip, (now_min, 0))
+    if win != now_min:
+        win, count = now_min, 0
+
+    count += 1
+    _window[ip] = (win, count)
+
+    if count > RATE_LIMIT_RPM:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    start = time.time()
+    resp = await call_next(request)
+    resp.headers["X-Request-Time-ms"] = str(int((time.time() - start) * 1000))
+    return resp
+
+
+# REDIS CACHE (shared)
+
+cache = RedisCache()
+
+@AiEngine.on_event("startup")
+async def _startup():
+    await cache.connect()
+
+@AiEngine.on_event("shutdown")
+async def _shutdown():
+    await cache.close()
+
 # CHAT MODELS
 
-
 class ChatRequest(BaseModel):
-    message: str
+    message: constr(min_length=1, max_length=2000)
     domain: str = "general"
-    tags: List[str] = []
+    tags: List[str] = Field(default_factory=list, max_length=30)
     sessionId: Optional[str] = None
     userId: Optional[str] = None
 
@@ -34,93 +90,68 @@ class ChatResponse(BaseModel):
     confidence: Optional[float] = None
     mode: Optional[str] = None
     intent: Optional[str] = None
-
     model_used: Optional[str] = None
 
     used_global_rag: bool = False
     used_chat_signals: bool = False
-
     global_rag_cache_hit: bool = False
     chat_signals_cache_hit: bool = False
 
-    retrieved_global_knowledge_ids: List[str] = []
-    retrieved_chat_signal_ids: List[str] = []
+    retrieved_global_knowledge_ids: List[str] = Field(default_factory=list)
+    retrieved_chat_signal_ids: List[str] = Field(default_factory=list)
 
     wrote_signal: bool = False
     signal_ref: Optional[str] = None
-
     cache_hit: bool = False
 
-
-# SOLVER ENDPOINT (WORKSPACE)
-
-
+# -------------------------
+# SOLVER ENDPOINT
+# -------------------------
 @AiEngine.post("/run-pipeline", response_model=Finalresult)
 async def run_pipeline(problem: ProblemReq):
-    """
-    High‑power problem solving engine.
-    Used when a session runs AI on a problem.
-    """
     return await AIpipeline(problem)
 
-
-# CHAT ENDPOINTS (OS SHELL)
-
-
+# -------------------------
+# CHAT ENDPOINTS
+# -------------------------
 @AiEngine.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    """
-    Team / private chat.
-    Flash‑Lite → Flash escalation.
-    Evolves via ChatSignals.
-    """
     out = await chat_pipeline(
         req.message,
         mode="chat",
         domain=req.domain,
         tags=req.tags,
         session_id=req.sessionId,
-        user_id=req.userId
+        user_id=req.userId,
+        cache=cache,  # <--- pass redis cache
     )
     return ChatResponse(**out)
 
 @AiEngine.post("/hub", response_model=ChatResponse)
 async def hub(req: ChatRequest):
-    """
-    Global Hub Assistant.
-    Reads global knowledge only.
-    No private session leakage.
-    """
     out = await chat_pipeline(
         req.message,
         mode="hub",
         domain=req.domain,
         tags=req.tags,
         session_id=req.sessionId,
-        user_id=req.userId
+        user_id=req.userId,
+        cache=cache,
     )
     return ChatResponse(**out)
 
 @AiEngine.post("/supervision", response_model=ChatResponse)
 async def supervision(req: ChatRequest):
-    """
-    Cross‑session supervision.
-    Detects risks, suggests improvements,
-    maintains continuity.
-    """
     out = await chat_pipeline(
         req.message,
         mode="supervision",
         domain=req.domain,
         tags=req.tags,
         session_id=req.sessionId,
-        user_id=req.userId
+        user_id=req.userId,
+        cache=cache,
     )
     return ChatResponse(**out)
-
-
-# ENTRYPOINT
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

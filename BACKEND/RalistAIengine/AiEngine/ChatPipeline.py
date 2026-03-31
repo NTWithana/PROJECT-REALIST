@@ -4,11 +4,17 @@ import json
 import hashlib
 import logging
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, Tuple, List, Optional
 
 import httpx
 from dotenv import load_dotenv
+
+# Redis (async)
+try:
+    from redis.asyncio import Redis
+except Exception:
+    Redis = None  # type: ignore
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -16,61 +22,111 @@ logger = logging.getLogger(__name__)
 
 # CONFIG
 
-
-CHAT_CACHE_TTL = timedelta(minutes=30)
-RAG_TTL = timedelta(hours=2)
-MAX_CACHE_SIZE = 800
-
-CONF_ESCALATE_TO_FLASH = 0.55
-CONF_SKIP_RAG = 0.75
-CONF_MIN_WRITE = 0.55  # don't write weak/noisy signals
-
-# Caches
-CHAT_CACHE: Dict[str, Dict[str, Any]] = {}
-GLOBAL_RAG_CACHE: Dict[str, Dict[str, Any]] = {}
-CHAT_RAG_CACHE: Dict[str, Dict[str, Any]] = {}
-
-# URLs
 REALIST_API_URL = os.getenv("REALIST_API_URL", "").rstrip("/")
 
-# Separate ChatSignals system (recommended)
-CHAT_SIGNALS_WRITE_URL = os.getenv("REALIST_CHAT_SIGNALS_WRITE_URL", "").rstrip("/")
-CHAT_SIGNALS_SEARCH_URL = os.getenv("REALIST_CHAT_SIGNALS_SEARCH_URL", "").rstrip("/")
+# ChatSignals endpoints in RealistAPI
+CHAT_SIGNALS_WRITE_URL = os.getenv("REALIST_CHAT_SIGNALS_WRITE_URL", "").rstrip("/")  # e.g. https://.../api/chat-signals
+CHAT_SIGNALS_SEARCH_URL = os.getenv("REALIST_CHAT_SIGNALS_SEARCH_URL", "").rstrip("/")  # e.g. https://.../api/chat-signals/semantic-similar
+
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_PREFIX = os.getenv("REDIS_PREFIX", "realist").strip()
+
+CHAT_CACHE_TTL_SECONDS = int(os.getenv("CHAT_CACHE_TTL_SECONDS", "1800"))  # 30m
+RAG_TTL_SECONDS = int(os.getenv("CHAT_RAG_TTL_SECONDS", "7200"))           # 2h
+
+CONF_ESCALATE_TO_FLASH = float(os.getenv("CHAT_CONF_ESCALATE_TO_FLASH", "0.55"))
+CONF_SKIP_RAG = float(os.getenv("CHAT_CONF_SKIP_RAG", "0.75"))
+CONF_MIN_WRITE = float(os.getenv("CHAT_CONF_MIN_WRITE", "0.55"))
+
+HTTP_TIMEOUT = float(os.getenv("HTTP_TIMEOUT_SECONDS", "6.0"))
+MODEL_TIMEOUT_LITE = float(os.getenv("MODEL_TIMEOUT_LITE_SECONDS", "8.0"))
+MODEL_TIMEOUT_FLASH = float(os.getenv("MODEL_TIMEOUT_FLASH_SECONDS", "10.0"))
+
+MAX_MSG_CHARS = int(os.getenv("CHAT_MAX_MSG_CHARS", "1400"))
+MAX_CTX_CHARS = int(os.getenv("CHAT_MAX_CTX_CHARS", "1800"))
+MAX_ANSWER_CHARS = int(os.getenv("CHAT_MAX_ANSWER_CHARS", "2000"))
+
+# REDIS
+
+
+_redis: Optional["Redis"] = None
+
+def _redis_enabled() -> bool:
+    return bool(REDIS_URL) and Redis is not None
+
+async def redis_client() -> Optional["Redis"]:
+    global _redis
+    if not _redis_enabled():
+        return None
+    if _redis is None:
+        _redis = Redis.from_url(
+            REDIS_URL,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_connect_timeout=3,
+            socket_timeout=3,
+            retry_on_timeout=True,
+            health_check_interval=30,
+        )
+    return _redis
+
+async def redis_get_json(key: str) -> Optional[dict]:
+    r = await redis_client()
+    if not r:
+        return None
+    try:
+        raw = await r.get(key)
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception as e:
+        logger.error(f"Redis get error: {e}")
+        return None
+
+async def redis_set_json(key: str, value: dict, ttl_seconds: int) -> None:
+    r = await redis_client()
+    if not r:
+        return
+    try:
+        await r.set(key, json.dumps(value, ensure_ascii=False), ex=ttl_seconds)
+    except Exception as e:
+        logger.error(f"Redis set error: {e}")
 
 # MODEL STUBS (REPLACE)
 
 
 async def flash_lite_chat(prompt: str) -> str:
-    return f"[Flash-Lite] {prompt[:1200]}"
+    return f"[Flash-Lite] {prompt[:2000]}"
 
 async def flash_chat(prompt: str) -> str:
-    return f"[Flash] {prompt[:1200]}"
-
-# SAFE CALL + RETRY
+    return f"[Flash] {prompt[:2000]}"
 
 
-async def safe_call(fn, *args, timeout=8):
+# SAFE CALLS
+
+
+async def safe_call(fn, *args, timeout: float):
     try:
         return await asyncio.wait_for(fn(*args), timeout=timeout)
     except Exception as e:
         logger.error(f"Model error: {e}")
         return ""
 
-async def http_call_with_retry(method: str, url: str, *, json_body=None, params=None, timeout=6.0, retries=2):
-    last_err = None
-    for attempt in range(retries + 1):
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                if method.upper() == "GET":
-                    return await client.get(url, params=params)
-                if method.upper() == "POST":
-                    return await client.post(url, json=json_body)
-                raise ValueError("Unsupported method")
-        except Exception as e:
-            last_err = e
-            await asyncio.sleep(0.25 * (attempt + 1))
-    logger.error(f"HTTP error after retries: {url} | {last_err}")
-    return None
+async def http_get(url: str, params: dict) -> Optional[httpx.Response]:
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            return await client.get(url, params=params)
+    except Exception as e:
+        logger.error(f"HTTP GET error: {url} | {e}")
+        return None
+
+async def http_post(url: str, json_body: dict) -> Optional[httpx.Response]:
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            return await client.post(url, json=json_body)
+    except Exception as e:
+        logger.error(f"HTTP POST error: {url} | {e}")
+        return None
 
 
 # UTILS
@@ -79,26 +135,19 @@ async def http_call_with_retry(method: str, url: str, *, json_body=None, params=
 def now() -> datetime:
     return datetime.utcnow()
 
-def clamp01(x: float) -> float:
-    return max(0.0, min(1.0, x))
-
-def trim(text: str, limit: int = 1200) -> str:
+def trim(text: str, limit: int) -> str:
     return (text or "")[:limit]
 
-def is_fresh(ts: datetime, ttl: timedelta) -> bool:
-    return (now() - ts) < ttl
-
-def evict_if_needed(cache: Dict[str, Dict[str, Any]]):
-    if len(cache) > MAX_CACHE_SIZE:
-        oldest = sorted(cache.items(), key=lambda x: x[1]["ts"])[0][0]
-        cache.pop(oldest, None)
+def clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
 
 def stable_key(*parts: str) -> str:
     raw = "||".join([p or "" for p in parts])
     return hashlib.md5(raw.encode()).hexdigest()
 
-def clean_ids(ids: List[str]) -> List[str]:
-    return [x for x in ids if x and isinstance(x, str)]
+def parse_confidence(raw: str, default: float = 0.6) -> float:
+    m = re.search(r"(0(?:\.\d+)?|1(?:\.0+)?)", raw or "")
+    return clamp01(float(m.group(1))) if m else default
 
 def strip_code_fences(s: str) -> str:
     if not s:
@@ -114,32 +163,65 @@ def safe_json_loads(raw: str) -> Optional[dict]:
         return None
     try:
         return json.loads(raw)
-    except:
-        # try to salvage first JSON object
+    except Exception:
         m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
         if not m:
             return None
         try:
             return json.loads(m.group(0))
-        except:
+        except Exception:
             return None
 
-def parse_confidence(raw: str, default: float = 0.6) -> float:
-    # expects "0.73" or "CONFIDENCE: 0.73" etc
-    m = re.search(r"(0(?:\.\d+)?|1(?:\.0+)?)", raw or "")
-    return clamp01(float(m.group(1))) if m else default
+def clean_ids(ids: List[str]) -> List[str]:
+    return [x for x in ids if x and isinstance(x, str)]
 
 def redact_private_bits(text: str) -> str:
-    # lightweight guardrail: avoid accidentally persisting secrets
     if not text:
         return ""
-    text = re.sub(r"\b\d{12,19}\b", "[REDACTED_NUMBER]", text)  # long numbers
+    text = re.sub(r"\b\d{12,19}\b", "[REDACTED_NUMBER]", text)
     text = re.sub(r"(?i)\b(api[_-]?key|secret|token|password)\b\s*[:=]\s*\S+", "[REDACTED_SECRET]", text)
     return text
 
+# CANONICAL CHAT OUTPUT
+
+def canonical_chat_output(
+    *,
+    response: str,
+    confidence: float,
+    mode: str,
+    intent: str,
+    model_used: str,
+    used_global_rag: bool,
+    used_chat_signals: bool,
+    global_rag_cache_hit: bool,
+    chat_signals_cache_hit: bool,
+    retrieved_global_knowledge_ids: List[str],
+    retrieved_chat_signal_ids: List[str],
+    wrote_signal: bool,
+    signal_ref: Optional[str],
+    cache_hit: bool,
+) -> Dict[str, Any]:
+    return {
+        "response": trim(response, MAX_ANSWER_CHARS),
+        "confidence": clamp01(confidence),
+        "mode": mode,
+        "intent": intent,
+        "model_used": model_used,
+        "used_global_rag": bool(used_global_rag),
+        "used_chat_signals": bool(used_chat_signals),
+        "global_rag_cache_hit": bool(global_rag_cache_hit),
+        "chat_signals_cache_hit": bool(chat_signals_cache_hit),
+        "retrieved_global_knowledge_ids": clean_ids(retrieved_global_knowledge_ids),
+        "retrieved_chat_signal_ids": clean_ids(retrieved_chat_signal_ids),
+        "wrote_signal": bool(wrote_signal),
+        "signal_ref": signal_ref,
+        "cache_hit": bool(cache_hit),
+    }
+
 # ROUTER (FLASH-LITE)
 
-async def route_chat(message: str, mode: str = "chat") -> Dict[str, Any]:
+
+async def route_chat(message: str, mode: str) -> Dict[str, Any]:
     prompt = f"""
 Return JSON only:
 {{
@@ -160,42 +242,29 @@ Rules:
 MESSAGE:
 {message}
 """
-    raw = await safe_call(flash_lite_chat, prompt)
-    data = safe_json_loads(raw)
-
-    if not data:
-        return {
-            "mode": mode,
-            "intent": "chat",
-            "use_global_rag": True,
-            "use_chat_signals": True,
-            "escalate_to_flash": False,
-            "confidence": 0.6,
-            "memory_write": False
-        }
-
+    raw = await safe_call(flash_lite_chat, prompt, timeout=MODEL_TIMEOUT_LITE)
+    data = safe_json_loads(raw) or {}
     return {
         "mode": data.get("mode", mode),
         "intent": data.get("intent", "chat"),
         "use_global_rag": bool(data.get("use_global_rag", True)),
         "use_chat_signals": bool(data.get("use_chat_signals", True)),
         "escalate_to_flash": bool(data.get("escalate_to_flash", False)),
-        "confidence": clamp01(float(data.get("confidence", 0.6))),
+        "confidence": clamp01(float(data.get("confidence", 0.6) or 0.6)),
         "memory_write": bool(data.get("memory_write", False)),
     }
-
 
 # GLOBAL KNOWLEDGE RAG (READ)
 
 
-async def retrieve_global_rag(query: str, domain: Optional[str] = None, tags: Optional[List[str]] = None) -> Tuple[str, List[str], bool]:
+async def retrieve_global_rag(query: str, domain: Optional[str], tags: Optional[List[str]]) -> Tuple[str, List[str], bool]:
     if not REALIST_API_URL:
         return "", [], False
 
-    key = stable_key("global_rag", query, domain or "", ",".join(tags or []))
-    cached = GLOBAL_RAG_CACHE.get(key)
-    if cached and is_fresh(cached["ts"], RAG_TTL):
-        return cached["context"], cached.get("ids", []), True
+    key = f"{REDIS_PREFIX}:chat:global_rag:{stable_key(query, domain or '', ','.join(tags or []))}"
+    cached = await redis_get_json(key)
+    if cached:
+        return cached.get("context", ""), cached.get("ids", []), True
 
     params = {"query": query}
     if domain:
@@ -203,44 +272,46 @@ async def retrieve_global_rag(query: str, domain: Optional[str] = None, tags: Op
     if tags:
         params["tags"] = tags
 
-    res = await http_call_with_retry("GET", f"{REALIST_API_URL}/api/knowledge/semantic-similar", params=params)
+    res = await http_get(f"{REALIST_API_URL}/api/knowledge/semantic-similar", params=params)
     if not res or res.status_code != 200:
         return "", [], False
 
     data = (res.json() or [])[:8]
     ids: List[str] = []
     lines: List[str] = []
-
     for x in data:
         kid = x.get("id")
         if kid:
             ids.append(kid)
-
         lines.append(
             f"- ID: {kid}\n"
             f"  Problem: {trim(x.get('problem_summary',''), 220)}\n"
             f"  Solution: {trim(x.get('solution_summary',''), 320)}\n"
-            f"  Confidence: {x.get('confidence', 0)} | Reused: {x.get('reused_count', 0)} | Approved: {x.get('approved_count', 0)}"
+            f"  Conf: {x.get('confidence', 0)} | Reused: {x.get('reused_count', 0)} | Approved: {x.get('approved_count', 0)}"
         )
 
-    context = trim("\n".join(lines), 1600)
-    GLOBAL_RAG_CACHE[key] = {"context": context, "ids": ids, "ts": now()}
-    evict_if_needed(GLOBAL_RAG_CACHE)
+    context = trim("\n".join(lines), MAX_CTX_CHARS)
+
+    await redis_set_json(
+        key,
+        {"context": context, "ids": ids, "ts": now().isoformat() + "Z"},
+        ttl_seconds=RAG_TTL_SECONDS,
+    )
 
     return context, ids, False
 
-# =========================
-# CHAT SIGNALS RAG (READ) - OPTIONAL
-# =========================
 
-async def retrieve_chat_signals(query: str, domain: Optional[str] = None, tags: Optional[List[str]] = None) -> Tuple[str, List[str], bool]:
+# CHAT SIGNALS RAG (READ)
+
+
+async def retrieve_chat_signals(query: str, domain: Optional[str], tags: Optional[List[str]]) -> Tuple[str, List[str], bool]:
     if not CHAT_SIGNALS_SEARCH_URL:
         return "", [], False
 
-    key = stable_key("chat_rag", query, domain or "", ",".join(tags or []))
-    cached = CHAT_RAG_CACHE.get(key)
-    if cached and is_fresh(cached["ts"], RAG_TTL):
-        return cached["context"], cached.get("ids", []), True
+    key = f"{REDIS_PREFIX}:chat:signals_rag:{stable_key(query, domain or '', ','.join(tags or []))}"
+    cached = await redis_get_json(key)
+    if cached:
+        return cached.get("context", ""), cached.get("ids", []), True
 
     params = {"query": query}
     if domain:
@@ -248,19 +319,17 @@ async def retrieve_chat_signals(query: str, domain: Optional[str] = None, tags: 
     if tags:
         params["tags"] = tags
 
-    res = await http_call_with_retry("GET", CHAT_SIGNALS_SEARCH_URL, params=params)
+    res = await http_get(CHAT_SIGNALS_SEARCH_URL, params=params)
     if not res or res.status_code != 200:
         return "", [], False
 
     data = (res.json() or [])[:8]
     ids: List[str] = []
     lines: List[str] = []
-
     for x in data:
         sid = x.get("id") or x.get("signalId")
         if sid:
             ids.append(sid)
-
         lines.append(
             f"- SignalID: {sid}\n"
             f"  Category: {x.get('category','')}\n"
@@ -269,14 +338,18 @@ async def retrieve_chat_signals(query: str, domain: Optional[str] = None, tags: 
         )
 
     context = trim("\n".join(lines), 1200)
-    CHAT_RAG_CACHE[key] = {"context": context, "ids": ids, "ts": now()}
-    evict_if_needed(CHAT_RAG_CACHE)
+
+    await redis_set_json(
+        key,
+        {"context": context, "ids": ids, "ts": now().isoformat() + "Z"},
+        ttl_seconds=RAG_TTL_SECONDS,
+    )
 
     return context, ids, False
 
-# =========================
-# SIGNAL EXTRACTION (STRUCTURED EVOLUTION)
-# =========================
+
+# SIGNAL EXTRACTION (EVOLUTION)
+
 
 async def extract_signal(message: str, response: str) -> Dict[str, Any]:
     prompt = f"""
@@ -299,29 +372,25 @@ MESSAGE:
 RESPONSE:
 {response}
 """
-    raw = await safe_call(flash_lite_chat, prompt)
-    data = safe_json_loads(raw)
-
-    if not data:
-        return {"pattern": None, "category": "unknown", "importance": 0.5, "tags": []}
-
-    return {
-        "pattern": trim(redact_private_bits(str(data.get("pattern") or "")), 500) or None,
-        "category": str(data.get("category") or "unknown"),
-        "importance": clamp01(float(data.get("importance", 0.5))),
-        "tags": [str(t) for t in (data.get("tags") or []) if isinstance(t, (str, int, float))][:12],
-    }
-
-
-# WRITE-BACK (CHAT SIGNALS)
-
+    raw = await safe_call(flash_lite_chat, prompt, timeout=MODEL_TIMEOUT_LITE)
+    data = safe_json_loads(raw) or {}
+    pattern = trim(redact_private_bits(str(data.get("pattern") or "")), 500) or None
+    category = str(data.get("category") or "unknown")
+    try:
+        importance = clamp01(float(data.get("importance", 0.5)))
+    except Exception:
+        importance = 0.5
+    tags = data.get("tags") or []
+    if not isinstance(tags, list):
+        tags = []
+    tags = [str(t) for t in tags if isinstance(t, (str, int, float))][:12]
+    return {"pattern": pattern, "category": category, "importance": importance, "tags": tags}
 
 async def write_chat_signal(payload: Dict[str, Any]) -> bool:
     if not CHAT_SIGNALS_WRITE_URL:
         return False
-    res = await http_call_with_retry("POST", CHAT_SIGNALS_WRITE_URL, json_body=payload)
+    res = await http_post(CHAT_SIGNALS_WRITE_URL, json_body=payload)
     return bool(res and res.status_code in (200, 201, 204))
-
 
 # CHAT PIPELINE
 
@@ -333,25 +402,26 @@ async def chat_pipeline(
     domain: str = "general",
     tags: Optional[List[str]] = None,
     session_id: Optional[str] = None,
-    user_id: Optional[str] = None
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
 
-    msg = trim(redact_private_bits(message), 1200)
+    msg = trim(redact_private_bits(message or ""), MAX_MSG_CHARS)
     tags = tags or []
 
-    ckey = stable_key("chat", mode, domain, ",".join(tags), msg)
-    cached = CHAT_CACHE.get(ckey)
-    if cached and is_fresh(cached["ts"], CHAT_CACHE_TTL):
-        return {**cached["data"], "cache_hit": True}
+    # Redis response cache (big cost saver)
+    cache_key = f"{REDIS_PREFIX}:chat:final:{stable_key(mode, domain, ','.join(tags), msg)}"
+    cached = await redis_get_json(cache_key)
+    if cached and isinstance(cached, dict) and cached.get("out"):
+        out = cached["out"]
+        out["cache_hit"] = True
+        return out
 
     route = await route_chat(msg, mode=mode)
 
-    # Force RAG for certain intents
     force_rag = route["intent"] in ("research", "plan", "decide")
     use_global_rag = bool(route["use_global_rag"] or force_rag)
     use_chat_signals = bool(route["use_chat_signals"])
 
-    # Skip RAG for simple chat if confident
     if route["intent"] == "chat" and route["confidence"] >= CONF_SKIP_RAG:
         use_global_rag = False
         use_chat_signals = False
@@ -359,19 +429,19 @@ async def chat_pipeline(
     global_ctx, global_ids, global_cache_hit = await retrieve_global_rag(
         query=msg,
         domain=domain if domain else None,
-        tags=tags if tags else None
+        tags=tags if tags else None,
     ) if use_global_rag else ("", [], False)
 
     chat_ctx, chat_ids, chat_cache_hit = await retrieve_chat_signals(
         query=msg,
         domain=domain if domain else None,
-        tags=tags if tags else None
+        tags=tags if tags else None,
     ) if use_chat_signals else ("", [], False)
 
     system = {
         "chat": "You are Catalyst OS chat—fast, helpful, minimal fluff.",
         "hub": "You are the Realist Global Hub Assistant. Use global knowledge summaries; never reference private session data.",
-        "supervision": "You are the session supervisor. Suggest improvements, detect risks, propose next actions, and keep continuity across sessions."
+        "supervision": "You are the session supervisor. Suggest improvements, detect risks, propose next actions, and keep continuity across sessions.",
     }.get(mode, "You are a helpful assistant.")
 
     base_prompt = f"""
@@ -396,95 +466,80 @@ Return:
 3) One short 'why this' explanation
 """
 
-    # Escalation logic
     if route["escalate_to_flash"] or route["confidence"] < CONF_ESCALATE_TO_FLASH:
         model_used = "flash"
-        answer = await safe_call(flash_chat, base_prompt, timeout=10)
+        answer = await safe_call(flash_chat, base_prompt, timeout=MODEL_TIMEOUT_FLASH)
     else:
         model_used = "flash_lite"
-        answer = await safe_call(flash_lite_chat, base_prompt, timeout=8)
+        answer = await safe_call(flash_lite_chat, base_prompt, timeout=MODEL_TIMEOUT_LITE)
 
-    answer = trim(answer, 1600)
+    answer = trim(answer, MAX_ANSWER_CHARS)
 
-    # Confidence scoring (lite is fine)
     conf_raw = await safe_call(
         flash_lite_chat,
         f"Return only a number 0-1.\nANSWER:\n{answer}",
-        timeout=6
+        timeout=MODEL_TIMEOUT_LITE,
     )
-    confidence = parse_confidence(conf_raw, default=route["confidence"])
+    confidence = parse_confidence(conf_raw, default=float(route.get("confidence", 0.6)))
 
-    # Extract structured signal
     signal = await extract_signal(msg, answer)
 
-    # Decide whether to write memory
     should_write = (
         (route.get("memory_write") or mode in ("hub", "supervision"))
         and confidence >= CONF_MIN_WRITE
-        and signal.get("pattern")
-        and signal.get("importance", 0) >= 0.45
+        and bool(signal.get("pattern"))
+        and float(signal.get("importance", 0.0)) >= 0.45
     )
 
     wrote_signal = False
-    signal_id = None
+    signal_ref = None
 
     if should_write:
-        # Dedup key prevents spamming the store with near-identical signals
-        dedup_key = stable_key(
-            "signal",
-            mode,
-            domain,
-            signal.get("category") or "",
-            signal.get("pattern") or ""
-        )
-
+        dedup_key = stable_key("signal", mode, domain, signal.get("category") or "", signal.get("pattern") or "")
         payload = {
             "dedupKey": dedup_key,
-            "type": "chat_signal",
             "mode": mode,
             "intent": route.get("intent"),
             "domain": domain,
             "tags": list(set(tags + (signal.get("tags") or [])))[:20],
             "sessionId": session_id,
             "userId": user_id,
-            "signal": signal,
+            "category": signal.get("category"),
+            "pattern": signal.get("pattern"),
+            "importance": signal.get("importance"),
             "message": msg,
             "response": trim(redact_private_bits(answer), 1200),
             "confidence": confidence,
             "modelUsed": model_used,
             "retrievedGlobalKnowledgeIds": clean_ids(global_ids),
             "retrievedChatSignalIds": clean_ids(chat_ids),
-            "createdAt": now().isoformat() + "Z"
+            "createdAt": now().isoformat() + "Z",
         }
-
         wrote_signal = await write_chat_signal(payload)
         if wrote_signal:
-            signal_id = dedup_key  # local reference; your API can return a real id later
+            signal_ref = dedup_key
 
-    result = {
-        "response": answer,
-        "confidence": confidence,
-        "mode": mode,
-        "intent": route.get("intent"),
-        "model_used": model_used,
+    out = canonical_chat_output(
+        response=answer,
+        confidence=confidence,
+        mode=mode,
+        intent=str(route.get("intent") or "chat"),
+        model_used=model_used,
+        used_global_rag=use_global_rag,
+        used_chat_signals=use_chat_signals,
+        global_rag_cache_hit=global_cache_hit,
+        chat_signals_cache_hit=chat_cache_hit,
+        retrieved_global_knowledge_ids=global_ids,
+        retrieved_chat_signal_ids=chat_ids,
+        wrote_signal=wrote_signal,
+        signal_ref=signal_ref,
+        cache_hit=False,
+    )
 
-        "used_global_rag": bool(use_global_rag),
-        "used_chat_signals": bool(use_chat_signals),
+    await redis_set_json(
+        cache_key,
+        {"out": out, "ts": now().isoformat() + "Z"},
+        ttl_seconds=CHAT_CACHE_TTL_SECONDS,
+    )
 
-        "global_rag_cache_hit": bool(global_cache_hit),
-        "chat_signals_cache_hit": bool(chat_cache_hit),
-
-        "retrieved_global_knowledge_ids": clean_ids(global_ids),
-        "retrieved_chat_signal_ids": clean_ids(chat_ids),
-
-        "signal": signal,
-        "wrote_signal": wrote_signal,
-        "signal_ref": signal_id,
-
-        "cache_hit": False
-    }
-
-    CHAT_CACHE[ckey] = {"data": result, "ts": now()}
-    evict_if_needed(CHAT_CACHE)
-
-    return result
+    return out
