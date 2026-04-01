@@ -1,11 +1,6 @@
+import { apiFetch } from "./client";
+
 export async function fetchUserSessions() {
-  const token = localStorage.getItem("token");
-
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/sessions`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-
-  if (!res.ok) return [];
-
+  const res = await apiFetch("/api/sessions/my");
   return res.json();
 }

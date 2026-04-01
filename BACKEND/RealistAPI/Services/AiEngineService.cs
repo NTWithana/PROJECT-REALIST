@@ -1,7 +1,8 @@
-﻿using System.Net.Http.Json;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using RealistAPI.Interfaces;
 using RealistAPI.Models;
+using System.Net.Http.Json;
+using System.Text.Json;
 
 namespace RealistAPI.Services
 {
@@ -30,22 +31,25 @@ namespace RealistAPI.Services
         }
 
         //  GENERAL CHAT 
-        public async Task<string> RunChatAsync(string message)
+        public async Task<AiChatResponseDto> RunChatAsync(string message)
         {
-            var payload = new { message };
+            var res = await _http.PostAsJsonAsync($"{_baseUrl}/chat", new
+            {
+                message = message,
+                mode = "hub"
+            });
 
-            var res = await _http.PostAsJsonAsync($"{_baseUrl}/chat", payload);
+            res.EnsureSuccessStatusCode();
 
-            if (!res.IsSuccessStatusCode)
-                throw new Exception("AI chat error: " + await res.Content.ReadAsStringAsync());
+            var json = await res.Content.ReadAsStringAsync();
 
-            var data = await res.Content.ReadFromJsonAsync<ChatResponseDto>();
-            return data?.Response ?? "";
+            return JsonSerializer.Deserialize<AiChatResponseDto>(
+                json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
+            );
         }
+
     }
 
-    public class ChatResponseDto
-    {
-        public string Response { get; set; } = "";
-    }
+
 }

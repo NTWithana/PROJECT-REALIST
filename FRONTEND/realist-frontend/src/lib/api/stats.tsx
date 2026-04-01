@@ -1,6 +1,6 @@
-export async function fetchGlobalStats() {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/knowledge/stats`);
+import { apiFetch } from "./client";
 
-  if (!res.ok) return null;
+export async function fetchGlobalStats() {
+  const res = await apiFetch("/api/knowledge/stats");
   return res.json();
 }

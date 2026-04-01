@@ -1,5 +1,6 @@
 "use client";
 
+import { apiFetch } from "@/lib/api/client";
 import { useState } from "react";
 
 type SemanticResult = {
@@ -19,6 +20,13 @@ export default function GlobalSearchPanel() {
   const [semanticResults, setSemanticResults] = useState<SemanticResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [meta, setMeta] = useState<{
+    intent: string;
+    confidence: number;
+    usedRag: boolean;
+    usedDeep: boolean;
+    retrievedKnowledgeIds: string[];
+  } | null>(null);
 
   async function runUnifiedSearch() {
     if (!query.trim()) return;
@@ -28,22 +36,20 @@ export default function GlobalSearchPanel() {
     setAiInsight(null);
     setSemanticResults([]);
 
-    // Run semantic search
     const semanticReq = fetch(
       `/api/knowledge/semantic-similar?query=${encodeURIComponent(query)}`
     ).then((res) => res.json());
 
-    // Run AI assistant
-    const aiReq = fetch("/api/hub/assistant", {
+    const aiReq = apiFetch("/api/hub/assistant", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: query }),
     }).then((res) => res.json());
 
     const [semanticData, aiData] = await Promise.all([semanticReq, aiReq]);
 
     setSemanticResults(semanticData || []);
-    setAiInsight(aiData?.response || null);
+    setAiInsight(aiData.response);
+    setMeta(aiData.meta);
 
     setLoading(false);
   }
@@ -51,7 +57,6 @@ export default function GlobalSearchPanel() {
   return (
     <div className="space-y-6">
 
-      {/* SEARCH BAR */}
       <div className="bg-white/5 border border-white/10 rounded-lg p-4">
         <input
           value={query}
@@ -69,21 +74,29 @@ export default function GlobalSearchPanel() {
         </button>
       </div>
 
-      {/* LOADING STATE */}
       {loading && (
         <div className="text-white/40 text-sm animate-pulse">
           Thinking…
         </div>
       )}
 
-      {/* EMPTY STATE */}
       {!loading && searched && !aiInsight && semanticResults.length === 0 && (
         <div className="text-white/40 text-sm">
           No global knowledge found. Try a broader query.
         </div>
       )}
 
-      {/* AI INSIGHT BLOCK */}
+      {meta && (
+        <div className="bg-white/5 border border-white/10 rounded-lg p-4 text-sm space-y-1">
+          <div>
+            Interpreted as: <span className="text-cyan-300">{meta.intent}</span>
+          </div>
+          <div>Confidence: {(meta.confidence * 100).toFixed(0)}%</div>
+          <div>Global knowledge used: {meta.usedRag ? "Yes" : "No"}</div>
+          <div>Deep reasoning: {meta.usedDeep ? "Yes" : "No"}</div>
+        </div>
+      )}
+
       {aiInsight && (
         <div className="bg-white/5 border border-white/10 rounded-lg p-4 space-y-2">
           <h3 className="text-white/70 text-sm">AI Insight</h3>
@@ -93,7 +106,6 @@ export default function GlobalSearchPanel() {
         </div>
       )}
 
-      {/* SEMANTIC RESULTS BLOCK */}
       {semanticResults.length > 0 && (
         <div className="bg-white/5 border border-white/10 rounded-lg p-4 space-y-3">
           <h3 className="text-white/70 text-sm">Semantic Matches</h3>

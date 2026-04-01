@@ -6,6 +6,8 @@ namespace RealistAPI.Interfaces
     public interface IAiEngineService
     {
         Task<AiEngineResponseDto> RunPipelineAsync(ProblemReqDto req);
-        Task<string> RunChatAsync(string message);
+
+        //returns structured chat response
+        Task<AiChatResponseDto> RunChatAsync(string message);
     }
 }

@@ -10,7 +10,6 @@ import SessionsPanel from "@/components/hub/YourSessions";
 import TrendingPanel from "@/components/hub/TrendingPanel";
 import StatsPanel from "@/components/hub/StatsPanel";
 
-
 const orbitron = Orbitron({
   subsets: ["latin"],
   weight: ["400", "700"],
@@ -18,15 +17,9 @@ const orbitron = Orbitron({
 
 export default function GlobalHub() {
   const [mounted, setMounted] = useState(false);
-  const [showCards, setShowCards] = useState([false, false, false]);
 
   useEffect(() => {
     setMounted(true);
-
-    // stagger card reveal
-    setTimeout(() => setShowCards([true, false, false]), 1400);
-    setTimeout(() => setShowCards([true, true, false]), 1700);
-    setTimeout(() => setShowCards([true, true, true]), 2000);
   }, []);
 
   return (
@@ -64,7 +57,6 @@ export default function GlobalHub() {
 
       <main className="relative z-10 max-w-7xl mx-auto px-6 py-12 space-y-14">
 
-        {/* TITLE — ONLY RENDER AFTER MOUNT */}
         {mounted && (
           <div className="text-center space-y-3">
             <h1
@@ -91,41 +83,30 @@ export default function GlobalHub() {
           <GlobalSearchPanel />
         </section>
 
-        {/* PANELS — STAGGERED MOUNT */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-10">
 
-          {/* SESSIONS */}
-          {showCards[0] && (
-            <div className="fade-slide-up bg-white/5 border border-white/10 rounded-lg p-4 backdrop-blur shadow-[0_0_20px_rgba(76,201,240,0.15)]">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-lg font-semibold">Your Sessions</h2>
-                <button className="px-3 py-1 bg-gradient-to-r from-[#4CC9F0] to-[#72EFDD] text-black text-sm font-semibold rounded-md shadow-[0_0_15px_rgba(76,201,240,0.7)] hover:scale-105 transition">
-                  New Session
-                </button>
-              </div>
-              <SessionsPanel />
+          <div className="fade-slide-up bg-white/5 border border-white/10 rounded-lg p-4 backdrop-blur shadow-[0_0_20px_rgba(76,201,240,0.15)]">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold">Your Sessions</h2>
+              <button className="px-3 py-1 bg-gradient-to-r from-[#4CC9F0] to-[#72EFDD] text-black text-sm font-semibold rounded-md shadow-[0_0_15px_rgba(76,201,240,0.7)] hover:scale-105 transition">
+                New Session
+              </button>
             </div>
-          )}
+            <SessionsPanel />
+          </div>
 
-          {/* TRENDS */}
-          {showCards[1] && (
-            <div className="fade-slide-up bg-white/5 border border-white/10 rounded-lg p-4 backdrop-blur shadow-[0_0_20px_rgba(76,201,240,0.15)]">
-              <h2 className="text-lg font-semibold mb-3">Global Trends</h2>
-              <TrendingPanel />
-            </div>
-          )}
+          <div className="fade-slide-up bg-white/5 border border-white/10 rounded-lg p-4 backdrop-blur shadow-[0_0_20px_rgba(76,201,240,0.15)]">
+            <h2 className="text-lg font-semibold mb-3">Global Trends</h2>
+            <TrendingPanel />
+          </div>
 
-          {/* STATS */}
-          {showCards[2] && (
-            <div className="fade-slide-up bg-white/5 border border-white/10 rounded-lg p-4 backdrop-blur shadow-[0_0_20px_rgba(76,201,240,0.15)]">
-              <h2 className="text-lg font-semibold mb-3">Global Stats</h2>
-              <StatsPanel />
-            </div>
-          )}
+          <div className="fade-slide-up bg-white/5 border border-white/10 rounded-lg p-4 backdrop-blur shadow-[0_0_20px_rgba(76,201,240,0.15)]">
+            <h2 className="text-lg font-semibold mb-3">Global Stats</h2>
+            <StatsPanel />
+          </div>
 
         </section>
       </main>
     </div>
-    );
-
+  );
 }

@@ -35,7 +35,20 @@ namespace RealistAPI.Controllers
 
             var response = await _ai.RunChatAsync(prompt);
 
-            return Ok(new { response });
+            return Ok(new
+            {
+                response = response.Response,
+                meta = new
+                {
+                    intent = response.Intent,
+                    confidence = response.Confidence,
+                    usedRag = response.UsedGlobalRag,
+                    usedDeep = response.UsedDeep,
+                    retrievedKnowledgeIds = response.RetrievedGlobalKnowledgeIds
+                }
+            });
+
+
         }
     }
 }

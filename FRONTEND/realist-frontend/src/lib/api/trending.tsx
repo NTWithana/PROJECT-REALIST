@@ -1,6 +1,8 @@
-export async function fetchTrending(limit = 20) {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/knowledge/trending?limit=${limit}`);
+import { apiFetch } from "./client";
 
-  if (!res.ok) return [];
+export async function fetchTrending(limit = 20) {
+  const res = await apiFetch(
+    `/api/knowledge/trending?limit=${limit}`
+  );
   return res.json();
 }
