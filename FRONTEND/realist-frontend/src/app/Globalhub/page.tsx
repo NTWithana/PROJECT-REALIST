@@ -9,6 +9,8 @@ import GlobalSearchPanel from "@/components/hub/GlobalSearchPanel";
 import SessionsPanel from "@/components/hub/YourSessions";
 import TrendingPanel from "@/components/hub/TrendingPanel";
 import StatsPanel from "@/components/hub/StatsPanel";
+import { useCatalystOS } from "@/lib/os/useCatalystOS";
+import { useMemoryEvolution } from "@/lib/os/useMemoryEvolution";
 
 const orbitron = Orbitron({
   subsets: ["latin"],
@@ -16,12 +18,22 @@ const orbitron = Orbitron({
 });
 
 export default function GlobalHub() {
+  const { mode } = useCatalystOS();   
   const [mounted, setMounted] = useState(false);
+
+  // Catalyst OS status
+  const [osStatus, setOsStatus] = useState<"observing" | "thinking">("observing");
 
   useEffect(() => {
     setMounted(true);
   }, []);
+  const { signals } = useMemoryEvolution();
 
+  signals.map((s) => (
+  <div key={s.id} className="text-xs text-white/60">
+    {s.summary}
+  </div>
+))
   return (
     <div className="relative min-h-screen bg-black text-white overflow-hidden">
 
@@ -80,7 +92,9 @@ export default function GlobalHub() {
         )}
 
         <section>
-          <GlobalSearchPanel />
+          {/*  Pass OS status callback */}
+          <GlobalSearchPanel onStatusChange={setOsStatus} />
+
         </section>
 
         <section className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-10">
@@ -107,6 +121,15 @@ export default function GlobalHub() {
 
         </section>
       </main>
+
+      {/* Catalyst OS Presence */}
+      <div className="fixed bottom-4 right-4 bg-black/60 border border-white/10 rounded-lg px-4 py-2 text-xs backdrop-blur">
+        <div className="text-white/70 font-semibold">Catalyst OS</div>
+        <div className="text-white/40">
+          {osStatus === "thinking" ? "Synthesizing…" : "Observing"}
+        </div>
+      </div>
+
     </div>
   );
 }

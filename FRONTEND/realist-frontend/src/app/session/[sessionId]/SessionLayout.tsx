@@ -5,13 +5,14 @@ import { useSessionUI } from "../state/useSession";
 
 import ProblemList from "../components/ProblemList";
 import SolutionPanel from "../components/SolutionPanel";
-import AISuggestions from "../components/AISuggestions";
 import ActivityFeed from "../components/ActivityFeed";
 import ChatPanel from "../components/ChatPanel";
 import SimilarProblems from "../components/SimilarProblems";
-import AiInsights from "../components/AiInsights";
 import VersionTimeline from "../components/VersionTimeline";
+import { runSupervisor } from "@/lib/os/runSupervisor";
+import { main } from "framer-motion/client";
 
+                                                                                            
 function DockPanel({
   title,
   children,
@@ -35,12 +36,31 @@ function Placeholder() {
   return <div className="h-40 bg-black/20 rounded-md"></div>;
 }
 
-export default function SessionLayout({ sessionId }: { sessionId: string }) {
-  const { visibleTools, isSolo, applyPreset } = useSessionUI();
+export default function SessionLayout({
+  sessionId,
+}: {
+  sessionId: string;
+}) {
+  const {
+    visibleTools,
+    isSolo,
+    applyPreset,
+    activeProblem,
+    versions,
+    activity,
+    consistency,
+  } = useSessionUI();
 
+
+  // Apply preset once
   useEffect(() => {
     applyPreset("deepWork");
   }, []);
+
+  // Run supervisor whenever session intelligence changes
+  useEffect(() => {
+    runSupervisor(sessionId);
+  }, [sessionId, activeProblem, versions, activity, consistency]);
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -80,19 +100,18 @@ export default function SessionLayout({ sessionId }: { sessionId: string }) {
             </DockPanel>
           )}
 
-         {visibleTools.includes("versionTimeline") && (
-  <DockPanel title="Version Timeline">
-    <VersionTimeline sessionId={sessionId} />
-  </DockPanel>
-)}
+          {visibleTools.includes("versionTimeline") && (
+            <DockPanel title="Version Timeline">
+              <VersionTimeline sessionId={sessionId} />
+            </DockPanel>
+          )}
 
-  {visibleTools.includes("aiSuggestions") && (
-      <DockPanel title="AI Insights">
-    <AiInsights sessionId={sessionId} />
-    </DockPanel>
-)}
-
-
+         
+          {visibleTools.includes("activityFeed") && (
+            <DockPanel title="Activity Feed">
+              <ActivityFeed sessionId={sessionId} />
+            </DockPanel>
+          )}
         </div>
       </main>
 
@@ -116,7 +135,6 @@ export default function SessionLayout({ sessionId }: { sessionId: string }) {
 
         </div>
       </aside>
-
     </div>
   );
 }

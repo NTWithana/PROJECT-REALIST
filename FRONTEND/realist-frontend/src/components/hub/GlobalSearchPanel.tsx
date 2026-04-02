@@ -13,8 +13,12 @@ type SemanticResult = {
   optimized_count: number;
   reused_count: number;
 };
-
-export default function GlobalSearchPanel() {
+export default function GlobalSearchPanel({
+  onStatusChange,
+}: {
+  onStatusChange?: (state: "observing" | "thinking") => void;
+}) 
+ {
   const [query, setQuery] = useState("");
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [semanticResults, setSemanticResults] = useState<SemanticResult[]>([]);
@@ -29,30 +33,35 @@ export default function GlobalSearchPanel() {
   } | null>(null);
 
   async function runUnifiedSearch() {
-    if (!query.trim()) return;
+  if (!query.trim()) return;
 
-    setLoading(true);
-    setSearched(true);
-    setAiInsight(null);
-    setSemanticResults([]);
+  onStatusChange?.("thinking"); //OS enters thinking mode
 
-    const semanticReq = fetch(
-      `/api/knowledge/semantic-similar?query=${encodeURIComponent(query)}`
-    ).then((res) => res.json());
+  setLoading(true);
+  setSearched(true);
+  setAiInsight(null);
+  setSemanticResults([]);
 
-    const aiReq = apiFetch("/api/hub/assistant", {
-      method: "POST",
-      body: JSON.stringify({ message: query }),
-    }).then((res) => res.json());
+  const semanticReq = fetch(
+    `/api/knowledge/semantic-similar?query=${encodeURIComponent(query)}`
+  ).then((res) => res.json());
 
-    const [semanticData, aiData] = await Promise.all([semanticReq, aiReq]);
+  const aiReq = apiFetch("/api/hub/assistant", {
+    method: "POST",
+    body: JSON.stringify({ message: query }),
+  }).then((res) => res.json());
 
-    setSemanticResults(semanticData || []);
-    setAiInsight(aiData.response);
-    setMeta(aiData.meta);
+  const [semanticData, aiData] = await Promise.all([semanticReq, aiReq]);
 
-    setLoading(false);
-  }
+  setSemanticResults(semanticData || []);
+  setAiInsight(aiData.response);
+  setMeta(aiData.meta);
+
+  setLoading(false);
+
+  onStatusChange?.("observing");  //  OS returns to idle mode
+}
+
 
   return (
     <div className="space-y-6">
