@@ -1,25 +1,34 @@
 import os
-import json
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
+import os
+import json
+import asyncio
 from openai import AsyncOpenAI
-# ENV 
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-# CLIENTS (CREATE ONCE)
+
+# ---------- CLIENTS ----------
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
 deepseek_client = AsyncOpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com"
 )
-# HELPERS 
-def extract_text(resp):
+
+# ---------- SAFE PARSE ----------
+def safe_text(resp):
     try:
-        return resp.output[0].content[0].text
+        return resp.output_text
     except:
-        return json.dumps({"error": "invalid_response"})
-#  GPT-5 NANO 
+        try:
+            return resp.output[0].content[0].text
+        except:
+            return '{"error":"invalid_response"}'
+
+# ---------- GPT-5 NANO ----------
 async def gpt5_nano(prompt: str, timeout: float = 8.0) -> str:
     try:
         resp = await openai_client.responses.create(
@@ -27,30 +36,31 @@ async def gpt5_nano(prompt: str, timeout: float = 8.0) -> str:
             input=prompt,
             timeout=timeout
         )
-        return extract_text(resp)
+        return safe_text(resp)
     except Exception as e:
-        return json.dumps({"error": "nano_failed", "details": str(e)})
-#  DEEPSEEK 
+        return '{"error":"nano_failed"}'
+
+# ---------- DEEPSEEK V3.2 SPECIAL ----------
 async def deepseek_reasoner(prompt: str, timeout: float = 18.0) -> str:
     try:
-        # try V3.2 first
         try:
             resp = await deepseek_client.responses.create(
                 model="deepseek-v3.2-speciale",
                 input=prompt,
                 timeout=timeout
             )
-            return extract_text(resp)
-        except Exception:
+            return safe_text(resp)
+        except:
             # fallback
             resp = await deepseek_client.responses.create(
                 model="deepseek-reasoner",
                 input=prompt,
                 timeout=timeout
             )
-            return extract_text(resp)
-    except Exception as e:
-        return json.dumps({"error": "deep_failed", "details": str(e)})
+            return safe_text(resp)
+
+    except Exception:
+        return '{"error":"deep_failed"}'
 # REQUEST MODEL
 class ProblemReq(BaseModel):
     description: str
