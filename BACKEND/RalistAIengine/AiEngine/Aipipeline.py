@@ -87,7 +87,7 @@ SESSION_CONTEXT:
 
 Return JSON only."""
 
-# HELPERS 
+# ---------- HELPERS ----------
 
 def now():
     return datetime.utcnow()
@@ -129,7 +129,7 @@ def fallback_core(solution, confidence, sources):
         "sources": sources
     }
 
-# MAIN 
+# ---------- MAIN ----------
 
 async def AIpipeline(problem: ProblemReq) -> Finalresult:
     cleaned = (problem.description or "")[:2400]
@@ -147,11 +147,11 @@ async def AIpipeline(problem: ProblemReq) -> Finalresult:
     ctrl_raw = await gpt5_nano(controller_prompt, timeout=MODEL_TIMEOUT_FAST)
     ctrl = safe_json_loads(ctrl_raw) or fallback_ctrl()
 
-    # RAG
+    # ---------- RAG ----------
     use_rag = ctrl["complexity"] in ("medium", "high")
     context, retrieved_ids, rag_cache_hit = await retrieve_rag(problem, use_rag)
 
-    # ROUTING 
+    # ---------- ROUTING ----------
     use_deep = (
         ctrl.get("use_reasoner") is True
         or ctrl.get("confidence", 0.5) < 0.5
@@ -236,7 +236,7 @@ RULES:
         )
         deep_cache_hit = False
 
-    #  NORMALIZE 
+    # ---------- NORMALIZE ----------
     core["confidence"] = min(core.get("confidence", 0.7), 0.9)
 
     result = Finalresult(
