@@ -3,93 +3,10 @@ from datetime import datetime
 
 from models import gpt5_nano
 from chat_signals import write_chat_signal
+from session_graph import get_graph, find_impacts
+from code_graph import get_code_graph, find_code_impacts
 
 MODEL_TIMEOUT_FAST = 8.0
-
-MEGA_PROMPT = """You are a lightweight AI controller inside a cost-optimized multi-model system.
-
-You act as a deterministic orchestrator.
-
-Your job:
-- understand input
-- classify intent
-- estimate complexity
-- decide if deeper reasoning is required
-- extract memory signals
-- detect inconsistencies
-- create a minimal plan
-- generate optimized structured instructions
-- optionally generate a short response
-
-Be concise, structured, and consistent.
-
----
-
-### TASKS (DO ALL IN ONE PASS)
-
-1. Intent:
-["chat", "question", "task", "problem", "planning", "other"]
-
-2. Complexity:
-["low", "medium", "high"]
-
-3. Confidence (0–1)
-
-4. use_reasoner = true IF:
-- multi-step reasoning
-- ambiguity
-- debugging / optimization / system design
-- confidence < 0.55
-
-5. Memory signal (or null):
-{
-  "topic": "...",
-  "user_goal": "...",
-  "importance": 0–1
-}
-
-6. Inconsistency detection:
-true/false
-
-7. Task plan:
-1–3 short steps max
-
-8. Instructions:
-{
-  "goal": "...",
-  "constraints": "...",
-  "expected_output": "...",
-  "notes": "..."
-}
-
-9. Draft response:
-ONLY if complexity = low or medium
-
----
-
-### RULES
-
-- Output STRICT JSON only
-- No extra text
-- Be deterministic
-- Keep tokens LOW
-- Do NOT hallucinate
-- Do NOT over-escalate
-- If unsure → lower confidence
-
----
-
-### INPUT
-
-USER_INPUT:
-{user_input}
-
-SESSION_CONTEXT:
-{short_context_or_summary}
-
----
-
-Return JSON only."""
 
 def now():
     return datetime.utcnow()
@@ -100,48 +17,67 @@ def safe_json_loads(raw: str):
     except:
         return {}
 
-async def chat_pipeline(
-    message: str,
-    *,
-    mode: str = "chat",
-    domain: str = "general",
-    tags=None,
-    session_id=None,
-    user_id=None
-) -> dict:
+async def chat_pipeline(message: str, *, mode="chat", session_id=None, user_id=None):
 
     msg = (message or "")[:1400]
 
-    controller_prompt = MEGA_PROMPT.format(
-        user_input=msg,
-        short_context_or_summary=""
-    )
+    ctrl = safe_json_loads(await gpt5_nano(msg, timeout=MODEL_TIMEOUT_FAST))
 
-    raw = await gpt5_nano(controller_prompt, timeout=MODEL_TIMEOUT_FAST)
-    ctrl = safe_json_loads(raw)
+    response = ctrl.get("draft_response") or "Thinking..."
 
-    response = ctrl.get("draft_response") or "I'm thinking about this."
-
-    # ---------- MEMORY SIGNAL ----------
-    signal = ctrl.get("memory_signal")
-    if signal:
+    # MEMORY
+    if ctrl.get("memory_signal"):
         await write_chat_signal({
-            "pattern": signal.get("topic"),
-            "importance": signal.get("importance"),
+            "pattern": ctrl["memory_signal"].get("topic"),
+            "importance": ctrl["memory_signal"].get("importance"),
             "message": msg,
             "response": response,
             "sessionId": session_id,
             "userId": user_id,
-            "createdAt": now().isoformat() + "Z"
+            "createdAt": now().isoformat()
         })
+
+    # SESSION IMPACT
+    if mode in ("hub", "supervision") and session_id:
+        try:
+            graph = await get_graph(session_id)
+            entities = safe_json_loads(
+                await gpt5_nano(f"Extract entities JSON:\n{msg}")
+            ) or []
+
+            impacts = find_impacts(graph, entities)
+
+            if impacts:
+                insight = await gpt5_nano(
+                    f"Explain system impact:\n{json.dumps(impacts)}"
+                )
+                response += f"\n\n🔗 Impact:\n{insight[:300]}"
+        except:
+            pass
+
+    # CODE IMPACT
+    if mode in ("hub", "supervision") and session_id:
+        try:
+            code_graph = await get_code_graph(session_id)
+
+            symbols = safe_json_loads(
+                await gpt5_nano(f"Extract symbols JSON:\n{msg}")
+            ) or []
+
+            code_impacts = find_code_impacts(code_graph, symbols)
+
+            if code_impacts:
+                insight = await gpt5_nano(
+                    f"Explain code impact:\n{json.dumps(code_impacts)}"
+                )
+                response += f"\n\n🧩 Code Impact:\n{insight[:300]}"
+        except:
+            pass
 
     return {
         "response": response,
         "confidence": ctrl.get("confidence", 0.6),
         "intent": ctrl.get("intent", "chat"),
         "mode": mode,
-        "model_used": "gpt5_nano",
-        "used_global_rag": False,
-        "used_chat_signals": bool(signal),
-        "cache_hit": False
+        "model_used": "gpt5_nano"
     }
