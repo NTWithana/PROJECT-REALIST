@@ -4,23 +4,19 @@ import hashlib
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
 from Models import ProblemReq, Finalresult
 from redis_cache import redis_get_json, redis_set_json
 from rag import retrieve_rag
 from models import gpt5_nano, deepseek_reasoner
 from session_graph import update_graph
 from code_graph import update_code_graph
-
 logger = logging.getLogger("aiengine")
 logging.basicConfig(level=logging.INFO)
-
 CONF_DEFAULT = 0.6
 MODEL_TIMEOUT_FAST = 8.0
 MODEL_TIMEOUT_DEEP = 18.0
 DEEP_CACHE_TTL = 86400
 FINAL_CACHE_TTL = 21600
-
 MEGA_PROMPT = """You are a lightweight AI controller in a multi-model system.
 Return STRICT JSON ONLY:
 {
@@ -45,13 +41,10 @@ RULES:
 INPUT:
 {user_input}
 """
-
 def now():
     return datetime.utcnow()
-
 def stable_hash(text: str) -> str:
     return hashlib.sha256((text or "").encode()).hexdigest()
-
 def safe_json_loads(raw: Optional[str]) -> Optional[Dict[str, Any]]:
     if not raw:
         return None
@@ -67,7 +60,6 @@ def safe_json_loads(raw: Optional[str]) -> Optional[Dict[str, Any]]:
         except Exception:
             pass
     return None
-
 async def safe_model_call(fn, *args, timeout: float, retries: int = 1):
     """Call model with timeout and optional retries. Return empty string on failure."""
     last_exc = None
@@ -83,7 +75,6 @@ async def safe_model_call(fn, *args, timeout: float, retries: int = 1):
             logger.warning("Model call failed (attempt %d): %s", attempt + 1, e)
     logger.error("Model call failed after retries: %s", last_exc)
     return ""
-
 def fallback_ctrl() -> Dict[str, Any]:
     return {
         "intent": "problem",
@@ -94,7 +85,6 @@ def fallback_ctrl() -> Dict[str, Any]:
         "instructions_for_worker": {},
         "draft_response": None
     }
-
 def fallback_core(solution: str, confidence: float, sources: List[str]) -> Dict[str, Any]:
     return {
         "solution": solution,
@@ -106,25 +96,21 @@ def fallback_core(solution: str, confidence: float, sources: List[str]) -> Dict[
         "uncertainty": ["Limited context"],
         "next_step": "Validate before applying"
     }
-
 async def AIpipeline(problem: ProblemReq) -> Finalresult:
     cleaned = (problem.description or "")[:2400]
     session_id = problem.sessionId or "anon"
     cache_key = f"solver:{session_id}:{stable_hash(cleaned)}"
-
     # Try final-result cache
     try:
         cached = await redis_get_json(cache_key)
     except Exception as e:
         logger.warning("Redis get error for final cache: %s", e)
         cached = None
-
     if cached:
         try:
             return Finalresult(**cached)
         except Exception as e:
             logger.warning("Cached final result invalid: %s", e)
-
     # Controller (fast)
     try:
         ctrl_raw = await safe_model_call(gpt5_nano, MEGA_PROMPT.format(user_input=cleaned), timeout=MODEL_TIMEOUT_FAST, retries=1)
@@ -132,7 +118,6 @@ async def AIpipeline(problem: ProblemReq) -> Finalresult:
     except Exception as e:
         logger.exception("Controller failure, using fallback: %s", e)
         ctrl = fallback_ctrl()
-
     # RAG retrieval (defensive)
     try:
         use_rag = str(ctrl.get("complexity", "medium")) in ("medium", "high")
@@ -142,19 +127,15 @@ async def AIpipeline(problem: ProblemReq) -> Finalresult:
     except Exception as e:
         logger.warning("RAG retrieval failed: %s", e)
         context, retrieved_ids, rag_cache_hit = "", [], False
-
     complexity = ctrl.get("complexity", "medium") or "medium"
     confidence_ctrl = float(ctrl.get("confidence", CONF_DEFAULT) or CONF_DEFAULT)
-
     # Decide mode
     mode = "fast"
     if complexity == "medium":
         mode = "hybrid"
     if complexity == "high" or bool(ctrl.get("inconsistency_detected")):
         mode = "deep"
-
     core = fallback_core(ctrl.get("draft_response") or cleaned, confidence_ctrl, retrieved_ids)
-
     # Deep reasoning with caching
     deep_cache_key = f"deep:{stable_hash(cleaned + (context or ''))}"
     deep_cache = None
@@ -163,7 +144,6 @@ async def AIpipeline(problem: ProblemReq) -> Finalresult:
         deep_cache = await redis_get_json(deep_cache_key)
     except Exception:
         deep_cache = None
-
     if mode in ("hybrid", "deep"):
         if deep_cache:
             core = deep_cache
@@ -197,7 +177,6 @@ CONTEXT:
             except Exception as e:
                 logger.exception("Deep reasoning failed: %s", e)
                 core = fallback_core(ctrl.get("draft_response") or cleaned, ctrl.get("confidence", CONF_DEFAULT), retrieved_ids)
-
             # store deep result if valid
             try:
                 await redis_set_json(deep_cache_key, core, ttl_seconds=DEEP_CACHE_TTL)
@@ -206,7 +185,6 @@ CONTEXT:
             deep_cache_hit = False
     else:
         deep_cache_hit = False
-
     # Reflection / polish (fast model)
     try:
         refine_prompt = f"Improve solution + add uncertainty + next_step:\n{json.dumps(core)}"
@@ -216,7 +194,6 @@ CONTEXT:
             core = refined
     except Exception as e:
         logger.debug("Reflection step failed (non-fatal): %s", e)
-
     # Session graph update (non-blocking)
     try:
         signal_raw = await safe_model_call(gpt5_nano, f"Extract entities/dependencies JSON:\n{cleaned}", timeout=MODEL_TIMEOUT_FAST, retries=0)
@@ -229,7 +206,6 @@ CONTEXT:
                 logger.warning("update_graph failed: %s", e)
     except Exception as e:
         logger.debug("Session graph extraction failed: %s", e)
-
     # Code graph update (non-blocking)
     try:
         if any(k in (cleaned or "").lower() for k in ["class", "function", "api", "repo"]):
@@ -242,7 +218,6 @@ CONTEXT:
                     logger.warning("update_code_graph failed: %s", e)
     except Exception as e:
         logger.debug("Code graph extraction failed: %s", e)
-
     # Normalize confidence and build result
     try:
         core_conf = float(core.get("confidence", CONF_DEFAULT) or CONF_DEFAULT)
@@ -250,7 +225,6 @@ CONTEXT:
         core_conf = CONF_DEFAULT
     core_conf = min(max(core_conf, 0.0), 0.92)
     core_sources = core.get("sources") if isinstance(core.get("sources"), list) else retrieved_ids
-
     result = Finalresult(
         Status="ok",
         OptimisedSolution=core.get("solution"),
@@ -268,11 +242,10 @@ CONTEXT:
         ProblemKey=cache_key,
         RetrievedKnowledgeIds=core_sources or []
     )
-
     # Cache final result
     try:
         await redis_set_json(cache_key, result.__dict__, ttl_seconds=FINAL_CACHE_TTL)
     except Exception as e:
         logger.warning("Failed to set final cache: %s", e)
-
     return result
+
