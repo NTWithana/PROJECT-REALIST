@@ -109,7 +109,7 @@ namespace RealistAPI.Controllers
 
             var aiResult = await _ai.RunPipelineAsync(req);
 
-            // 🔥 AUTO REUSE TRACKING (DEDUP SAFE)
+            // AUTO REUSE TRACKING (DEDUP SAFE)
             var reuseIds = aiResult.RetrievedKnowledgeIds?
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct()
