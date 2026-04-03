@@ -6,8 +6,10 @@ import redis.asyncio as redis
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
+
 def _hash_key(key: str) -> str:
     return hashlib.md5(key.encode("utf-8")).hexdigest()
+
 
 class RedisCache:
     def __init__(self):
@@ -39,4 +41,4 @@ class RedisCache:
     async def set_json(self, key: str, value: Any, ttl_seconds: int):
         if not self.client:
             return
-        await self.client.setex(_hash_key(key), ttl_seconds, json.dumps(value))
+        await self.client.setex(_hash_key(key), ttl_seconds,json.dumps(value)) 
