@@ -194,8 +194,9 @@ async def AIpipeline(problem: ProblemReq) -> Finalresult:
         logger.exception("Controller failure, using fallback: %s", e)
         ctrl = fallback_ctrl()
 
-    # FIX: ensure defined
+    # ensure defined
     use_rag = False
+    rag_cache_hit = False  
 
     try:
         use_rag = str(ctrl.get("complexity", "medium")) in ("medium", "high")

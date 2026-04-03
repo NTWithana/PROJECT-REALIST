@@ -34,3 +34,11 @@ class RedisCache:
         if not self.client:
             return
         await self.client.setex(_hash_key(key), ttl_seconds, json.dumps(value))
+
+_cache = RedisCache()
+
+async def redis_get_json(key: str):
+    return await _cache.get_json(key)
+
+async def redis_set_json(key: str, value, ttl_seconds: int):
+    await _cache.set_json(key, value, ttl_seconds)
