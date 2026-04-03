@@ -122,7 +122,7 @@ async def chat_pipeline(
 
     response = ctrl.get("draft_response") or "I'm thinking about this."
 
-    # ---------- MEMORY SIGNAL ----------
+    #  MEMORY SIGNAL 
     signal = ctrl.get("memory_signal")
     if signal:
         await write_chat_signal({
