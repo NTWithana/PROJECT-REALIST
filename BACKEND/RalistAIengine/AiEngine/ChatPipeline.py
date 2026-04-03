@@ -100,6 +100,8 @@ async def chat_pipeline(
     message: str,
     *,
     mode="chat",
+    domain: str = "general",
+    tags: Optional[list] = None,
     session_id: Optional[str] = None,
     user_id: Optional[str] = None
 ):

@@ -1,7 +1,7 @@
 import os
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional, List
+from typing import Dict, Optional, List
 import os
 import json
 import asyncio
@@ -87,4 +87,6 @@ class Finalresult(BaseModel):
     RagCacheHit: bool = False
     ProblemKey: Optional[str] = None
     RetrievedKnowledgeIds: List[str] = Field(default_factory=list)
+    Evaluation: Optional[Dict] = None
+    
 

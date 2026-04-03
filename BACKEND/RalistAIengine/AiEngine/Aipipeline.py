@@ -103,7 +103,7 @@ def fallback_core(solution: str, confidence: float, sources: List[str]) -> Dict[
         "next_step": "Validate before applying"
     }
 
-# ---------- AUTO EVOLUTION ----------
+#  AUTO EVOLUTION 
 async def auto_evolve(core: Dict[str, Any]) -> Dict[str, Any]:
     try:
         base_conf = float(core.get("confidence", 0.6))
@@ -152,9 +152,10 @@ INPUT:
 
         # evaluation trace
         core["evaluation"] = {
-            "score": score,
-            "evaluated_at": now().isoformat()
-        }
+        "score": score,
+        "issues": parsed.get("issues", []),
+        "evaluated_at": now().isoformat()
+}
 
         return core
 
@@ -162,7 +163,7 @@ INPUT:
         logger.debug("Auto-evolve skipped: %s", e)
         return core
 
-# ---------- MAIN PIPELINE ----------
+# MAIN PIPELINE 
 async def AIpipeline(problem: ProblemReq) -> Finalresult:
     cleaned = (problem.description or "")[:2400]
     session_id = problem.sessionId or "anon"
@@ -256,7 +257,7 @@ CONTEXT:
                     retries=0
                 )
 
-                # ✅ timeout fallback
+                # timeout fallback
                 if not deep_raw:
                     core = fallback_core(cleaned, confidence_ctrl, retrieved_ids)
                 else:
@@ -332,7 +333,9 @@ CONTEXT:
         RagCacheHit=bool(rag_cache_hit),
         DeepCacheHit=bool(deep_cache_hit),
         ProblemKey=cache_key,
-        RetrievedKnowledgeIds=core.get("sources") or retrieved_ids
+        RetrievedKnowledgeIds=core.get("sources") or retrieved_ids,
+        Evaluation=core.get("evaluation"),
+        
     )
 
     try:
