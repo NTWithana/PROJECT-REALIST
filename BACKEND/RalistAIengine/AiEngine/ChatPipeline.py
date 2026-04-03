@@ -7,15 +7,10 @@ from models import gpt5_nano
 from chat_signals import write_chat_signal
 from session_graph import get_graph, find_impacts
 from code_graph import get_code_graph, find_code_impacts
-
 logger = logging.getLogger("aiengine.chat")
 MODEL_TIMEOUT_FAST = 8.0
-
-
 def now():
     return datetime.utcnow()
-
-
 def safe_json_loads(raw: Optional[str]) -> Dict[str, Any]:
     if not raw:
         return {}
@@ -24,18 +19,14 @@ def safe_json_loads(raw: Optional[str]) -> Dict[str, Any]:
     except Exception:
         try:
             import re
-
             m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
             if m:
                 return json.loads(m.group(0))
         except Exception:
             pass
     return {}
-
-
-async def chat_pipeline(message: str, *, mode="chat", session_id: Optional[str] = None, user_id: Optional[str] = None):
+async def chat_pipeline(message: str, *, mode="chat", session_id: Optional[str]=None, user_id: Optional[str]=None):
     msg = (message or "")[:1400]
-
     # Controller call (fast)
     try:
         ctrl_raw = await gpt5_nano(msg, timeout=MODEL_TIMEOUT_FAST)
@@ -43,9 +34,7 @@ async def chat_pipeline(message: str, *, mode="chat", session_id: Optional[str] 
     except Exception as e:
         logger.warning("gpt5_nano failed in chat_pipeline: %s", e)
         ctrl = {}
-
     response = ctrl.get("draft_response") or ctrl.get("response") or "Thinking..."
-
     # MEMORY write (guarded)
     try:
         mem = ctrl.get("memory_signal")
@@ -61,7 +50,7 @@ async def chat_pipeline(message: str, *, mode="chat", session_id: Optional[str] 
                     "response": response,
                     "sessionId": session_id,
                     "userId": user_id,
-                    "createdAt": now().isoformat(),
+                    "createdAt": now().isoformat()
                 }
                 try:
                     await write_chat_signal(payload)
@@ -69,7 +58,6 @@ async def chat_pipeline(message: str, *, mode="chat", session_id: Optional[str] 
                     logger.debug("write_chat_signal failed (non-fatal): %s", e)
     except Exception as e:
         logger.debug("Memory extraction/write failed: %s", e)
-
     # SESSION IMPACT (non-blocking)
     if mode in ("hub", "supervision") and session_id:
         try:
@@ -83,16 +71,13 @@ async def chat_pipeline(message: str, *, mode="chat", session_id: Optional[str] 
             impacts = find_impacts(graph, entities or [])
             if impacts:
                 try:
-                    insight_raw = await gpt5_nano(
-                        f"Explain system impact:\n{json.dumps(impacts)}", timeout=MODEL_TIMEOUT_FAST
-                    )
+                    insight_raw = await gpt5_nano(f"Explain system impact:\n{json.dumps(impacts)}", timeout=MODEL_TIMEOUT_FAST)
                     insight = (insight_raw or "")[:300]
                     response += f"\n\nðŸ”— Impact:\n{insight}"
                 except Exception as e:
                     logger.debug("Impact explanation failed: %s", e)
         except Exception as e:
             logger.debug("Session impact check failed: %s", e)
-
     # CODE IMPACT (non-blocking)
     if mode in ("hub", "supervision") and session_id:
         try:
@@ -105,20 +90,18 @@ async def chat_pipeline(message: str, *, mode="chat", session_id: Optional[str] 
             code_impacts = find_code_impacts(code_graph, symbols or [])
             if code_impacts:
                 try:
-                    insight_raw = await gpt5_nano(
-                        f"Explain code impact:\n{json.dumps(code_impacts)}", timeout=MODEL_TIMEOUT_FAST
-                    )
+                    insight_raw = await gpt5_nano(f"Explain code impact:\n{json.dumps(code_impacts)}", timeout=MODEL_TIMEOUT_FAST)
                     insight = (insight_raw or "")[:300]
                     response += f"\n\nðŸ§© Code Impact:\n{insight}"
                 except Exception as e:
                     logger.debug("Code impact explanation failed: %s", e)
         except Exception as e:
             logger.debug("Code impact check failed: %s", e)
-
     return {
         "response": response,
         "confidence": float(ctrl.get("confidence", 0.6) or 0.6),
         "intent": ctrl.get("intent", "chat"),
         "mode": mode,
-        "model_used": "gpt5_nano",
+        "model_used": "gpt5_nano"
     }
+

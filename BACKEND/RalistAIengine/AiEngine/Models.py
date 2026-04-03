@@ -1,45 +1,36 @@
-
-# models.py
 import os
 import json
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
 from openai import AsyncOpenAI
-
-# ENV
+# ENV 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-
 # CLIENTS (CREATE ONCE)
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 deepseek_client = AsyncOpenAI(
     api_key=DEEPSEEK_API_KEY,
-    base_url="https://api.deepseek.com",
+    base_url="https://api.deepseek.com"
 )
-
-# HELPERS
+# HELPERS 
 def extract_text(resp):
     try:
         return resp.output[0].content[0].text
     except:
         return json.dumps({"error": "invalid_response"})
-
-
-# GPT-5 NANO
+#  GPT-5 NANO 
 async def gpt5_nano(prompt: str, timeout: float = 8.0) -> str:
     try:
         resp = await openai_client.responses.create(
             model="gpt-5-nano",
             input=prompt,
-            timeout=timeout,
+            timeout=timeout
         )
         return extract_text(resp)
     except Exception as e:
         return json.dumps({"error": "nano_failed", "details": str(e)})
-
-
-# DEEPSEEK
+#  DEEPSEEK 
 async def deepseek_reasoner(prompt: str, timeout: float = 18.0) -> str:
     try:
         # try V3.2 first
@@ -47,7 +38,7 @@ async def deepseek_reasoner(prompt: str, timeout: float = 18.0) -> str:
             resp = await deepseek_client.responses.create(
                 model="deepseek-v3.2-speciale",
                 input=prompt,
-                timeout=timeout,
+                timeout=timeout
             )
             return extract_text(resp)
         except Exception:
@@ -55,13 +46,11 @@ async def deepseek_reasoner(prompt: str, timeout: float = 18.0) -> str:
             resp = await deepseek_client.responses.create(
                 model="deepseek-reasoner",
                 input=prompt,
-                timeout=timeout,
+                timeout=timeout
             )
             return extract_text(resp)
     except Exception as e:
         return json.dumps({"error": "deep_failed", "details": str(e)})
-
-
 # REQUEST MODEL
 class ProblemReq(BaseModel):
     description: str
@@ -70,9 +59,7 @@ class ProblemReq(BaseModel):
     tags: Optional[List[str]] = []
     sessionId: Optional[str] = None
     intent: Optional[str] = None
-
-
-# RESPONSE MODEL
+# RESPONSE MODEL 
 class Finalresult(BaseModel):
     Status: str = "ok"
     OptimisedSolution: Optional[str] = None
@@ -90,3 +77,4 @@ class Finalresult(BaseModel):
     RagCacheHit: bool = False
     ProblemKey: Optional[str] = None
     RetrievedKnowledgeIds: List[str] = Field(default_factory=list)
+
