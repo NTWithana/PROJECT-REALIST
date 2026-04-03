@@ -13,28 +13,39 @@ CONF_DEFAULT = 0.6
 MODEL_TIMEOUT_FAST = 8.0
 MODEL_TIMEOUT_DEEP = 18.0
 
-MEGA_PROMPT = """You are a lightweight AI controller.
+MEGA_PROMPT = """You are a lightweight AI controller in a multi-model system.
 
-Return STRICT JSON:
+Return STRICT JSON ONLY:
+
 {
- "intent": "",
- "complexity": "",
+ "intent": "chat | question | task | problem | planning | other",
+ "complexity": "low | medium | high",
  "confidence": 0.0,
  "use_reasoner": true/false,
  "inconsistency_detected": true/false,
- "instructions_for_worker": {},
+ "instructions_for_worker": {
+   "goal": "",
+   "constraints": "",
+   "expected_output": "",
+   "notes": ""
+ },
  "draft_response": ""
 }
+
+RULES:
+- deterministic
+- minimal tokens
+- no hallucination
+- use_reasoner = true if multi-step / ambiguity / confidence < 0.55
 
 INPUT:
 {user_input}
 """
 
-# ---------- HELPERS ----------
 def now():
     return datetime.utcnow()
 
-def stable_hash(text: str) -> str:
+def stable_hash(text: str):
     return hashlib.sha256(text.encode()).hexdigest()
 
 def safe_json_loads(raw: str):
@@ -66,41 +77,33 @@ def fallback_core(solution, confidence, sources):
         "next_step": "Validate before applying"
     }
 
-# ---------- MAIN ----------
 async def AIpipeline(problem: ProblemReq) -> Finalresult:
     cleaned = (problem.description or "")[:2400]
 
-    cache_key = f"solver:final:{problem.sessionId}:{stable_hash(cleaned)}"
+    cache_key = f"solver:{problem.sessionId}:{stable_hash(cleaned)}"
     cached = await redis_get_json(cache_key)
     if cached:
         return Finalresult(**cached)
 
-    # ---------- CONTROLLER ----------
-    ctrl_raw = await gpt5_nano(
-        MEGA_PROMPT.format(user_input=cleaned),
-        timeout=MODEL_TIMEOUT_FAST
-    )
-    ctrl = safe_json_loads(ctrl_raw) or fallback_ctrl()
+    # CONTROLLER 
+    ctrl = safe_json_loads(
+        await gpt5_nano(MEGA_PROMPT.format(user_input=cleaned), MODEL_TIMEOUT_FAST)
+    ) or fallback_ctrl()
 
-    # ---------- RAG ----------
+    # RAG 
     use_rag = ctrl.get("complexity") in ("medium", "high")
     context, retrieved_ids, rag_cache_hit = await retrieve_rag(problem, use_rag)
 
     complexity = ctrl.get("complexity", "medium")
     confidence = float(ctrl.get("confidence", CONF_DEFAULT))
 
-    # ---------- MODE ----------
-    if complexity == "low" and confidence > 0.7:
-        mode = "fast"
-    elif complexity == "medium":
+    #  MODE 
+    mode = "fast"
+    if complexity == "medium":
         mode = "hybrid"
-    else:
+    if complexity == "high" or ctrl.get("inconsistency_detected"):
         mode = "deep"
 
-    if ctrl.get("inconsistency_detected"):
-        mode = "deep"
-
-    # ---------- BASE ----------
     core = fallback_core(
         ctrl.get("draft_response") or cleaned,
         confidence,
@@ -110,38 +113,49 @@ async def AIpipeline(problem: ProblemReq) -> Finalresult:
     deep_cache_key = f"deep:{stable_hash(cleaned + context)}"
     deep_cache = await redis_get_json(deep_cache_key)
 
-    # ---------- HYBRID ----------
-    if mode == "hybrid":
-        if deep_cache:
-            core = deep_cache
-            deep_cache_hit = True
-        else:
-            deep = await deepseek_reasoner(cleaned, timeout=MODEL_TIMEOUT_DEEP)
-            parsed = safe_json_loads(deep)
-            if parsed and "solution" in parsed:
-                core = parsed
-            await redis_set_json(deep_cache_key, core, 86400)
-            deep_cache_hit = False
+    # DEEP PROMPT 
+    deep_prompt = f"""
+Solve the problem step-by-step.
 
-    # ---------- DEEP ----------
-    elif mode == "deep":
+Return JSON:
+{{
+ "solution": "",
+ "critique": "",
+ "improvements": "",
+ "reasoning": "",
+ "confidence": 0.0,
+ "sources": []
+}}
+
+PROBLEM:
+{cleaned}
+
+CONTEXT:
+{context}
+"""
+
+    # HYBRID / DEEP
+    if mode in ("hybrid", "deep"):
         if deep_cache:
             core = deep_cache
             deep_cache_hit = True
         else:
             deep1 = safe_json_loads(
-                await deepseek_reasoner(cleaned, timeout=MODEL_TIMEOUT_DEEP)
+                await deepseek_reasoner(deep_prompt, MODEL_TIMEOUT_DEEP)
             ) or core
 
-            try:
-                deep2 = safe_json_loads(
-                    await deepseek_reasoner(
-                        f"Improve solution:\n{json.dumps(deep1)}",
-                        timeout=MODEL_TIMEOUT_DEEP
+            if mode == "deep":
+                try:
+                    deep2 = safe_json_loads(
+                        await deepseek_reasoner(
+                            f"Improve solution:\n{json.dumps(deep1)}",
+                            MODEL_TIMEOUT_DEEP
+                        )
                     )
-                )
-                core = deep2 if deep2 and "solution" in deep2 else deep1
-            except:
+                    core = deep2 if deep2 and "solution" in deep2 else deep1
+                except:
+                    core = deep1
+            else:
                 core = deep1
 
             await redis_set_json(deep_cache_key, core, 86400)
@@ -149,25 +163,23 @@ async def AIpipeline(problem: ProblemReq) -> Finalresult:
     else:
         deep_cache_hit = False
 
-    # ---------- REFLECTION ----------
+    # REFLECTION
     try:
-        reflect = await gpt5_nano(
-            f"Improve + add uncertainty + next step JSON:\n{json.dumps(core)}",
-            timeout=MODEL_TIMEOUT_FAST
+        refined = safe_json_loads(
+            await gpt5_nano(
+                f"Improve solution + add uncertainty + next_step:\n{json.dumps(core)}",
+                MODEL_TIMEOUT_FAST
+            )
         )
-        parsed = safe_json_loads(reflect)
-        if parsed and "solution" in parsed:
-            core = parsed
+        if refined and "solution" in refined:
+            core = refined
     except:
         pass
 
-    # ---------- SESSION GRAPH ----------
+    #  SESSION GRAPH
     try:
         signal = safe_json_loads(
-            await gpt5_nano(
-                f"Extract entities/dependencies JSON:\n{cleaned}",
-                timeout=MODEL_TIMEOUT_FAST
-            )
+            await gpt5_nano(f"Extract entities/dependencies JSON:\n{cleaned}")
         )
         if signal and problem.sessionId:
             signal["timestamp"] = now().isoformat()
@@ -175,18 +187,11 @@ async def AIpipeline(problem: ProblemReq) -> Finalresult:
     except:
         pass
 
-    # ---------- CODE GRAPH (AST-lite) ----------
-    is_code = any(k in cleaned.lower() for k in [
-        "class", "function", "api", "repo", "interface", "c#", "ts", "js", "python"
-    ])
-
-    if is_code:
+    # CODE GRAPH
+    if any(k in cleaned.lower() for k in ["class", "function", "api", "repo"]):
         try:
             code_data = safe_json_loads(
-                await gpt5_nano(
-                    f"Extract code structure JSON (file, symbols, depends_on):\n{cleaned}",
-                    timeout=MODEL_TIMEOUT_FAST
-                )
+                await gpt5_nano(f"Extract code structure JSON:\n{cleaned}")
             )
             if code_data and problem.sessionId:
                 await update_code_graph(problem.sessionId, code_data)

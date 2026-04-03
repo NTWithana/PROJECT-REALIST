@@ -21,7 +21,7 @@ async def chat_pipeline(message: str, *, mode="chat", session_id=None, user_id=N
 
     msg = (message or "")[:1400]
 
-    ctrl = safe_json_loads(await gpt5_nano(msg, timeout=MODEL_TIMEOUT_FAST))
+    ctrl = safe_json_loads(await gpt5_nano(msg, MODEL_TIMEOUT_FAST))
 
     response = ctrl.get("draft_response") or "Thinking..."
 
