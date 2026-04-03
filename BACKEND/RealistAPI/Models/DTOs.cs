@@ -44,35 +44,40 @@ public class AiEngineResponseDto
 public class FeedbackDto
 {
     public List<string> Messages { get; set; }
+}
 
 public class EditSolutionRequest
 {
-        public string NewText { get; set; }
-        public string Comment { get; set; }
+    public string NewText { get; set; }
+    public string Comment { get; set; }
 }
+
 public class ChatAiRequest
 {
-        public string Message { get; set; }
+    public string Message { get; set; }
 }
+
 public class ApproveAiRequest
 {
    public string MergedText { get; set; }
    public string SuggestionSummary { get; set; }
 }
+
+
  public class InviteCollaboratorRequest
 {
     public string UserId { get; set; }
 }
 
-    public class CreateSessionRequest
-    {
-        public string Title { get; set; }
+public class CreateSessionRequest
+  {
+      public string Title { get; set; }
         public string Description { get; set; }
-    }
+ }
     public class ChatResponseDto
     {
         public string Response { get; set; }
     }
 
 
-}
+

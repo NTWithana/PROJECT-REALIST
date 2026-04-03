@@ -36,7 +36,8 @@ builder.Services.AddScoped<IPasswordHasher, Argon2PasswordHasher>();
 builder.Services.Configure<JwtSettings>(
     builder.Configuration.GetSection("Jwt"));
 
-var jwtKey = builder.Configuration["Jwt:Key"];
+var jwtKey = builder.Configuration["Jwt:Key"]
+    ?? throw new Exception("JWT Key missing in config");
 var jwtIssuer = builder.Configuration["Jwt:Issuer"];
 
 builder.Services
@@ -59,7 +60,7 @@ builder.Services.AddAuthorization();
 
 // CORS
 var allowedOrigins = builder.Configuration
-    .GetSection("Cors__AllowedOrigins")
+    .GetSection("Cors:AllowedOrigins")
     .Get<string[]>() ?? Array.Empty<string>();
 
 builder.Services.AddCors(options =>
@@ -82,6 +83,7 @@ builder.Services.AddRateLimiter(options =>
         opt.Window = TimeSpan.FromMinutes(1);
         opt.QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst;
         opt.QueueLimit = 0;
+        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     });
 });
 
@@ -98,13 +100,20 @@ builder.Services.AddScoped<IGlobalKnowledgeRepository, GlobalKnowledgeRepository
 builder.Services.AddScoped<IChatSignalRepository, ChatSignalRepository>();
 
 // AI Engine
-builder.Services.AddHttpClient<IAiEngineService, AiEngineService>();
+builder.Services.AddHttpClient<IAiEngineService, AiEngineService>()
+    .ConfigureHttpClient(c =>
+    {
+        c.Timeout = TimeSpan.FromSeconds(25);
+    });
 
 var app = builder.Build();
 
 // Swagger
-app.UseSwagger();
-app.UseSwaggerUI();
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
 // Routing
 app.UseRouting();
@@ -116,8 +125,9 @@ app.UseCors("FrontendOnly");
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Rate Limiting (AFTER auth, BEFORE controllers)
+// Rate Limiting
 app.UseRateLimiter();
+
 
 // Controllers with rate limiting
 app.MapControllers().RequireRateLimiting("fixed");

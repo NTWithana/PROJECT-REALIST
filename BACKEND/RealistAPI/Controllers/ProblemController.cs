@@ -36,8 +36,9 @@ namespace RealistAPI.Controllers
             _embedding = embedding;
         }
 
-        private string? GetUserId() => User.FindFirst(ClaimTypes.NameIdentifier)?.Value
-;
+        private string? GetUserId() =>
+                   User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
 
         private bool IsLeader(CollaborationSession session, string userId) =>
             session.LeaderId == userId;
@@ -83,6 +84,7 @@ namespace RealistAPI.Controllers
         // ============================
 
         [HttpPost("{problemId}/run-ai")]
+        [Authorize]
         public async Task<IActionResult> RunAiForProblem(string sessionId, string problemId)
         {
             var userId = GetUserId();
@@ -266,6 +268,7 @@ namespace RealistAPI.Controllers
         // ============================
 
         [HttpPost("{problemId}/optimize")]
+        [Authorize]
         public async Task<IActionResult> OptimizeSolution(
             string sessionId,
             string problemId,

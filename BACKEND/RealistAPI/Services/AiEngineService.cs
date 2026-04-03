@@ -27,7 +27,10 @@ namespace RealistAPI.Services
                 throw new Exception("AI engine error: " + await res.Content.ReadAsStringAsync());
 
             var data = await res.Content.ReadFromJsonAsync<AiEngineResponseDto>();
-            return data!;
+            if (data == null)
+                throw new Exception("AI returned null response");
+
+            return data;
         }
 
         //  GENERAL CHAT 

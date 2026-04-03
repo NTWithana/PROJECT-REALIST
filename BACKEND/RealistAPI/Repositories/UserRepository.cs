@@ -6,17 +6,17 @@ namespace RealistAPI.Repositories
 {
     public class UserRepository : IUserRepository
     {
-        private readonly IMongoCollection<User> _users;
+        private readonly IMongoCollection<User?> _users;
 
         public UserRepository(IMongoDatabase db)
         {
-            _users = db.GetCollection<User>("Users");
+            _users = db.GetCollection<User?>("Users");
         }
 
-        public async Task<User> GetByEmailAsync(string email) =>
+        public async Task<User?> GetByEmailAsync(string email) =>
             await _users.Find(u => u.Email == email).FirstOrDefaultAsync();
 
-        public async Task<User> GetByIdAsync(string id) =>
+        public async Task<User?> GetByIdAsync(string id) =>
             await _users.Find(u => u.Id == id).FirstOrDefaultAsync();
 
         public async Task CreateAsync(User user) =>
