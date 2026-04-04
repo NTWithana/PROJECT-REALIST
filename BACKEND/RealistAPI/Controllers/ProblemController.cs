@@ -43,40 +43,6 @@ namespace RealistAPI.Controllers
         private bool IsLeader(CollaborationSession session, string userId) =>
             session.LeaderId == userId;
 
-        // GLOBAL RAG ENDPOINT
-       
-
-        [HttpGet("/api/knowledge/semantic-similar")]
-        [AllowAnonymous]
-        public async Task<IActionResult> GetSemanticSimilar(
-            [FromQuery] string query,
-            [FromQuery] string? domain,
-            [FromQuery] List<string>? tags)
-        {
-            if (string.IsNullOrWhiteSpace(query))
-                return BadRequest("Query is required");
-
-            var embedding = _embedding.GenerateEmbedding(query);
-
-            var results = await _globalKnowledge.FindSemanticSimilarAsync(
-                embedding, 10, domain, tags);
-
-            var shaped = results.Select(r => new
-            {
-                id = r.Id,
-                problem_summary = r.ProblemSummary,
-                solution_summary = r.SolutionSummary,
-                domain = r.Domain,
-                tags = r.Tags,
-                confidence = r.Confidence,
-                approved_count = r.ApprovedCount,
-                optimized_count = r.OptimizedCount,
-                reused_count = r.ReusedCount,
-                created_at = r.CreatedAt
-            });
-
-            return Ok(shaped);
-        }
 
         // RUN AI
         

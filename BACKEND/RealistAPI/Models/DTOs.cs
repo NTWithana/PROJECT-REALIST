@@ -82,10 +82,6 @@ public class CreateSessionRequest
       public string Title { get; set; }
         public string Description { get; set; }
  }
-    public class ChatResponseDto
-    {
-        public string Response { get; set; }
-    }
 
 
 
