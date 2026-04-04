@@ -37,14 +37,14 @@ namespace RealistAPI.Controllers
 
             return Ok(new
             {
-                response = response.Response,
+                response = response.Response ?? "",
                 meta = new
                 {
-                    intent = response.Intent,
+                    intent = response.Intent ?? "",
                     confidence = response.Confidence,
                     usedRag = response.UsedGlobalRag,
                     usedDeep = response.UsedDeep,
-                    retrievedKnowledgeIds = response.RetrievedGlobalKnowledgeIds
+                    retrievedKnowledgeIds = response.RetrievedGlobalKnowledgeIds ?? new List<string>()
                 }
             });
 

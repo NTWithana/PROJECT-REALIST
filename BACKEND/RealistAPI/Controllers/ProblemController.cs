@@ -82,6 +82,7 @@ namespace RealistAPI.Controllers
         
 
         [HttpPost("{problemId}/run-ai")]
+        [Authorize]
         public async Task<IActionResult> RunAiForProblem(string sessionId, string problemId)
         {
             var userId = GetUserId();
@@ -107,11 +108,19 @@ namespace RealistAPI.Controllers
             };
 
             var aiResult = await _ai.RunPipelineAsync(req);
+            if (aiResult == null)
+                return StatusCode(500, "AI returned null response");
+
+            if (aiResult.OptimisedSolution == null)
+                return StatusCode(500, "AI failed to generate solution");
+
+            if (string.IsNullOrWhiteSpace(aiResult.OptimisedSolution))
+                return StatusCode(500, "AI returned empty solution");
 
             var reuseIds = aiResult.RetrievedKnowledgeIds?
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct()
-                .ToList();
+                .ToList() ?? new List<string>();
 
             if (reuseIds?.Any() == true)
                 await _globalKnowledge.IncrementReusedBulkAsync(reuseIds);
@@ -137,7 +146,7 @@ namespace RealistAPI.Controllers
 
             if (solutionDoc == null)
                 return StatusCode(500, "Solution document error");
-
+            
             var version = new SolutionVersion
             {
                 Id = Guid.NewGuid().ToString(),
@@ -285,11 +294,19 @@ namespace RealistAPI.Controllers
             };
 
             var aiResult = await _ai.RunPipelineAsync(aiReq);
+            if (aiResult == null)
+                return StatusCode(500, "AI returned null response");
+
+            if (aiResult.OptimisedSolution == null)
+                return StatusCode(500, "AI failed to generate solution");
+
+            if (string.IsNullOrWhiteSpace(aiResult.OptimisedSolution))
+                return StatusCode(500, "AI returned empty solution");
 
             var reuseIds = aiResult.RetrievedKnowledgeIds?
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct()
-                .ToList();
+                .ToList() ?? new List<string>();
 
             if (reuseIds?.Any() == true)
                 await _globalKnowledge.IncrementReusedBulkAsync(reuseIds);

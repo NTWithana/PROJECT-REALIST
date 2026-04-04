@@ -1,8 +1,13 @@
-﻿namespace RealistAPI.Models
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
+
+namespace RealistAPI.Models
 {
     public class GlobalKnowledge
     {
-        public string Id { get; set; }           // Mongo _id
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string Id { get; set; } // Mongo _id
 
         public string ProblemId { get; set; }
         public string SessionId { get; set; }
