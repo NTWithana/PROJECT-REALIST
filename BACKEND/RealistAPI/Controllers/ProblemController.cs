@@ -43,9 +43,8 @@ namespace RealistAPI.Controllers
         private bool IsLeader(CollaborationSession session, string userId) =>
             session.LeaderId == userId;
 
-        // ============================
         // GLOBAL RAG ENDPOINT
-        // ============================
+       
 
         [HttpGet("/api/knowledge/semantic-similar")]
         [AllowAnonymous]
@@ -79,12 +78,10 @@ namespace RealistAPI.Controllers
             return Ok(shaped);
         }
 
-        // ============================
         // RUN AI
-        // ============================
+        
 
         [HttpPost("{problemId}/run-ai")]
-        [Authorize]
         public async Task<IActionResult> RunAiForProblem(string sessionId, string problemId)
         {
             var userId = GetUserId();
@@ -111,16 +108,13 @@ namespace RealistAPI.Controllers
 
             var aiResult = await _ai.RunPipelineAsync(req);
 
-            // AUTO REUSE TRACKING (DEDUP SAFE)
             var reuseIds = aiResult.RetrievedKnowledgeIds?
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct()
                 .ToList();
 
             if (reuseIds?.Any() == true)
-            {
                 await _globalKnowledge.IncrementReusedBulkAsync(reuseIds);
-            }
 
             SolutionDocument solutionDoc;
 
@@ -133,7 +127,6 @@ namespace RealistAPI.Controllers
                 };
 
                 await _solutions.CreateAsync(solutionDoc);
-
                 problem.SolutionDocumentId = solutionDoc.Id;
                 await _problems.UpdateAsync(problem);
             }
@@ -148,19 +141,20 @@ namespace RealistAPI.Controllers
             var version = new SolutionVersion
             {
                 Id = Guid.NewGuid().ToString(),
-                SolutionText = aiResult.OptimisedSolution,
-                Critique = aiResult.Critique,
-                Improvements = aiResult.Improvements,
+                SolutionText = aiResult.OptimisedSolution ?? "",
+                Critique = aiResult.Critique ?? "",
+                Improvements = aiResult.Improvements ?? "",
                 Iteration = solutionDoc.Versions.Count + 1,
-                Confidence = aiResult.Confidence,
-                Created_At = DateTime.UtcNow,
+                Confidence = aiResult.Confidence ?? 0.0,
+                Created_At = aiResult.Created_At ?? DateTime.UtcNow,
 
-                DeepCore = aiResult.DeepCore,
-                UsedRag = aiResult.UsedRag,
-                UsedDeep = aiResult.UsedDeep,
-                DeepCacheHit = aiResult.DeepCacheHit,
-                RagCacheHit = aiResult.RagCacheHit,
-                ProblemKey = aiResult.ProblemKey,
+                DeepCore = aiResult.DeepCore ?? "",
+                UsedRag = aiResult.UsedRag ?? false,
+                UsedDeep = aiResult.UsedDeep ?? false,
+                DeepCacheHit = aiResult.DeepCacheHit ?? false,
+                RagCacheHit = aiResult.RagCacheHit ?? false,
+                ProblemKey = aiResult.ProblemKey ?? "",
+
                 RetrievedKnowledgeIds = reuseIds ?? new List<string>()
             };
 
@@ -176,16 +170,16 @@ namespace RealistAPI.Controllers
                 Domain = problem.Domain,
                 Tags = problem.Tags ?? new List<string>(),
 
-                ProblemKey = aiResult.ProblemKey,
+                ProblemKey = aiResult.ProblemKey ?? "",
                 ProblemSummary = problem.Description,
                 SolutionSummary = version.SolutionText,
-                DeepCore = aiResult.DeepCore,
+                DeepCore = aiResult.DeepCore ?? "",
 
                 SourceKnowledgeIds = reuseIds ?? new List<string>(),
-                UsedRag = aiResult.UsedRag,
-                UsedDeep = aiResult.UsedDeep,
-                DeepCacheHit = aiResult.DeepCacheHit,
-                RagCacheHit = aiResult.RagCacheHit,
+                UsedRag = aiResult.UsedRag ?? false,
+                UsedDeep = aiResult.UsedDeep ?? false,
+                DeepCacheHit = aiResult.DeepCacheHit ?? false,
+                RagCacheHit = aiResult.RagCacheHit ?? false,
 
                 Confidence = version.Confidence,
                 CreatedAt = DateTime.UtcNow,
@@ -198,9 +192,10 @@ namespace RealistAPI.Controllers
             return Ok(version);
         }
 
-        // ============================
+
+     
         // APPROVE AI
-        // ============================
+    
 
         [HttpPost("{problemId}/approve-ai")]
         public async Task<IActionResult> ApproveAiSuggestion(
@@ -263,12 +258,9 @@ namespace RealistAPI.Controllers
             return Ok(version);
         }
 
-        // ============================
         // OPTIMIZE
-        // ============================
 
         [HttpPost("{problemId}/optimize")]
-        [Authorize]
         public async Task<IActionResult> OptimizeSolution(
             string sessionId,
             string problemId,
@@ -294,33 +286,31 @@ namespace RealistAPI.Controllers
 
             var aiResult = await _ai.RunPipelineAsync(aiReq);
 
-            // 🔥 AUTO REUSE TRACKING
             var reuseIds = aiResult.RetrievedKnowledgeIds?
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct()
                 .ToList();
 
             if (reuseIds?.Any() == true)
-            {
                 await _globalKnowledge.IncrementReusedBulkAsync(reuseIds);
-            }
 
             var newVersion = new SolutionVersion
             {
                 Id = Guid.NewGuid().ToString(),
-                SolutionText = aiResult.OptimisedSolution,
-                Critique = aiResult.Critique,
-                Improvements = aiResult.Improvements,
+                SolutionText = aiResult.OptimisedSolution ?? "",
+                Critique = aiResult.Critique ?? "",
+                Improvements = aiResult.Improvements ?? "",
                 Iteration = solutionDoc.Versions.Count + 1,
-                Confidence = aiResult.Confidence,
-                Created_At = DateTime.UtcNow,
+                Confidence = aiResult.Confidence ?? 0.0,
+                Created_At = aiResult.Created_At ?? DateTime.UtcNow,
 
-                DeepCore = aiResult.DeepCore,
-                UsedRag = aiResult.UsedRag,
-                UsedDeep = aiResult.UsedDeep,
-                DeepCacheHit = aiResult.DeepCacheHit,
-                RagCacheHit = aiResult.RagCacheHit,
-                ProblemKey = aiResult.ProblemKey,
+                DeepCore = aiResult.DeepCore ?? "",
+                UsedRag = aiResult.UsedRag ?? false,
+                UsedDeep = aiResult.UsedDeep ?? false,
+                DeepCacheHit = aiResult.DeepCacheHit ?? false,
+                RagCacheHit = aiResult.RagCacheHit ?? false,
+                ProblemKey = aiResult.ProblemKey ?? "",
+
                 RetrievedKnowledgeIds = reuseIds ?? new List<string>()
             };
 
@@ -336,16 +326,16 @@ namespace RealistAPI.Controllers
                 Domain = problem.Domain,
                 Tags = problem.Tags ?? new List<string>(),
 
-                ProblemKey = aiResult.ProblemKey,
+                ProblemKey = aiResult.ProblemKey ?? "",
                 ProblemSummary = problem.Description,
                 SolutionSummary = newVersion.SolutionText,
-                DeepCore = aiResult.DeepCore,
+                DeepCore = aiResult.DeepCore ?? "",
 
                 SourceKnowledgeIds = reuseIds ?? new List<string>(),
-                UsedRag = aiResult.UsedRag,
-                UsedDeep = aiResult.UsedDeep,
-                DeepCacheHit = aiResult.DeepCacheHit,
-                RagCacheHit = aiResult.RagCacheHit,
+                UsedRag = aiResult.UsedRag ?? false,
+                UsedDeep = aiResult.UsedDeep ?? false,
+                DeepCacheHit = aiResult.DeepCacheHit ?? false,
+                RagCacheHit = aiResult.RagCacheHit ?? false,
 
                 Confidence = newVersion.Confidence,
                 CreatedAt = DateTime.UtcNow,

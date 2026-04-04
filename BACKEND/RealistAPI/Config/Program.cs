@@ -103,7 +103,7 @@ builder.Services.AddScoped<IChatSignalRepository, ChatSignalRepository>();
 builder.Services.AddHttpClient<IAiEngineService, AiEngineService>()
     .ConfigureHttpClient(c =>
     {
-        c.Timeout = TimeSpan.FromSeconds(25);
+        c.Timeout = TimeSpan.FromSeconds(60);
     });
 
 var app = builder.Build();

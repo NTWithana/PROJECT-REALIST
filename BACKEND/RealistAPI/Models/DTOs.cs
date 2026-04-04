@@ -1,4 +1,6 @@
-﻿namespace RealistAPI.Models
+﻿using System.Text.Json.Serialization;
+
+namespace RealistAPI.Models
 {
     public class ProblemReqDto
     {
@@ -16,29 +18,35 @@ public class CreateProblemRequest
     public string Domain { get; set; }
     public List<string> Tags { get; set; } = new();
 }
+
 public class AiEngineResponseDto
 {
-    public string Status { get; set; }
-    public string OptimisedSolution { get; set; }
-    public double Confidence { get; set; }
-    public string Rationale { get; set; }
-    public int Iteration { get; set; }
-    public DateTime Created_At { get; set; }
+    public string? Status { get; set; }
 
-    // to get artifacts
-    public string DeepCore { get; set; }
-    public string Critique { get; set; }
-    public string Improvements { get; set; }
+    [JsonPropertyName("optimisedSolution")]
+    public string? OptimisedSolution { get; set; }
 
-    public bool UsedRag { get; set; }
-    public bool UsedDeep { get; set; }
-    public bool DeepCacheHit { get; set; }
-    public bool RagCacheHit { get; set; }
+    public double? Confidence { get; set; }
+    public string? Rationale { get; set; }
+    public int? Iteration { get; set; }
 
-    public string ProblemKey { get; set; }
+    [JsonPropertyName("created_at")]
+    public DateTime? Created_At { get; set; }
+
+    public string? DeepCore { get; set; }
+    public string? Critique { get; set; }
+    public string? Improvements { get; set; }
+
+    public bool? UsedRag { get; set; }
+    public bool? UsedDeep { get; set; }
+    public bool? DeepCacheHit { get; set; }
+    public bool? RagCacheHit { get; set; }
+
+    public string? ProblemKey { get; set; }
+
+    [JsonPropertyName("retrievedKnowledgeIds")]
     public List<string> RetrievedKnowledgeIds { get; set; } = new();
 }
-
 
 
 public class FeedbackDto

@@ -18,22 +18,48 @@ namespace RealistAPI.Services
                        ?? throw new InvalidOperationException("AI_ENGINE_URL not configured");
         }
 
-        //  RUN FULL PIPELINE 
+        // RUN FULL PIPELINE
+        
         public async Task<AiEngineResponseDto> RunPipelineAsync(ProblemReqDto req)
         {
+            Console.WriteLine("Calling AI Engine...");
+
             var res = await _http.PostAsJsonAsync($"{_baseUrl}/run-pipeline", req);
 
+            // HANDLE ERROR 
             if (!res.IsSuccessStatusCode)
-                throw new Exception("AI engine error: " + await res.Content.ReadAsStringAsync());
+            {
+                var err = await res.Content.ReadAsStringAsync();
+                Console.WriteLine("AI ERROR RESPONSE:");
+                Console.WriteLine(err);
 
-            var data = await res.Content.ReadFromJsonAsync<AiEngineResponseDto>();
+                throw new Exception("AI engine error: " + err);
+            }
+
+            // LOG RAW RESPONSE 
+            var raw = await res.Content.ReadAsStringAsync();
+            Console.WriteLine("RAW AI RESPONSE:");
+            Console.WriteLine(raw);
+
+            // SAFE DESERIALIZATION
+            var data = JsonSerializer.Deserialize<AiEngineResponseDto>(
+                raw,
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
             if (data == null)
-                throw new Exception("AI returned null response");
+                throw new Exception("AI returned null or invalid response");
+
+            Console.WriteLine("AI call successful");
 
             return data;
         }
 
-        //  GENERAL CHAT 
+        // 
+        // GENERAL CHAT
+        // 
         public async Task<AiChatResponseDto> RunChatAsync(string message)
         {
             var res = await _http.PostAsJsonAsync($"{_baseUrl}/chat", new
@@ -42,17 +68,31 @@ namespace RealistAPI.Services
                 mode = "hub"
             });
 
-            res.EnsureSuccessStatusCode();
+            if (!res.IsSuccessStatusCode)
+            {
+                var err = await res.Content.ReadAsStringAsync();
+                Console.WriteLine("AI CHAT ERROR:");
+                Console.WriteLine(err);
+
+                throw new Exception("AI chat error: " + err);
+            }
 
             var json = await res.Content.ReadAsStringAsync();
 
-            return JsonSerializer.Deserialize<AiChatResponseDto>(
+            Console.WriteLine("RAW CHAT RESPONSE:");
+            Console.WriteLine(json);
+
+            var result = JsonSerializer.Deserialize<AiChatResponseDto>(
                 json,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }
-            );
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                });
+
+            if (result == null)
+                throw new Exception("AI chat deserialization failed");
+
+            return result;
         }
-
     }
-
-
 }
