@@ -9,12 +9,15 @@ namespace RealistAPI.Controllers
     [Route("api/knowledge")]
     public class KnowledgeController : ControllerBase
     {
-        private readonly IEmbeddingService _embedding;
         private readonly IGlobalKnowledgeRepository _global;
+        private readonly IEmbeddingService _embedding;
 
-        public KnowledgeController(IGlobalKnowledgeRepository global)
+        public KnowledgeController(
+            IGlobalKnowledgeRepository global,
+            IEmbeddingService embedding)
         {
             _global = global;
+            _embedding = embedding;
         }
 
         [HttpGet("trending")]
@@ -43,12 +46,9 @@ namespace RealistAPI.Controllers
         {
             var stats = await _global.GetStatsAsync();
             return Ok(stats);
-       
         }
 
         // GLOBAL RAG ENDPOINT
-
-
         [HttpGet("semantic-similar")]
         [AllowAnonymous]
         public async Task<IActionResult> GetSemanticSimilar(
@@ -80,6 +80,5 @@ namespace RealistAPI.Controllers
 
             return Ok(shaped);
         }
-
     }
 }
