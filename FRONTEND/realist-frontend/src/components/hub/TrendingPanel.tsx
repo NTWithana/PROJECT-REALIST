@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchTrending } from "@/lib/api/trending";
+
 
 export default function TrendingPanel() {
   const [items, setItems] = useState<any[]>([]);
@@ -9,6 +9,13 @@ export default function TrendingPanel() {
 
   useEffect(() => {
     async function load() {
+      const fetchTrending = async () => {
+  return [
+    { title: "Human‑AI Co‑evolution" },
+    { title: "Session Supervision Models" },
+    { title: "Memory‑Driven Intelligence" },
+  ];
+};
       const data = await fetchTrending();
       setItems(data);
       setLoading(false);

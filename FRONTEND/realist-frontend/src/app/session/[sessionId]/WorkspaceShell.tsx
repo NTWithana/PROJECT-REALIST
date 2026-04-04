@@ -2,8 +2,7 @@
 
 import { ReactNode, useEffect } from "react";
 import { useSessionUI } from "../state/useSession";
-import ToolDrawer from "../components/ToolDrawer";
-import WindowRenderer from "../components/WindowRenderer";
+
 
 type WorkspaceShellProps = {
   sessionId: string;
@@ -48,8 +47,9 @@ export default function WorkspaceShell({ sessionId, children }: WorkspaceShellPr
       <div className="flex flex-1 overflow-hidden relative">
         {children}
 
-        <ToolDrawer />
-        <WindowRenderer />
+        {/* BACKGROUND ACCENTS */}
+        <div className="absolute -bottom-20 -right-20 w-60 h-60 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -top-16 -left-16 w-72 h-72 bg-pink-500/10 rounded-full blur-3xl pointer-events-none" />
       </div>
     </div>
   );

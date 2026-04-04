@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchGlobalStats } from "@/lib/api/stats";
 
 type Stats = {
   totalProblems: number;
@@ -27,6 +26,27 @@ export default function StatsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // --- STUB:MOCK GLOBAL STATS needs to remove in production ---
+  async function fetchGlobalStats(): Promise<Stats> {
+    return {
+      totalProblems: 128,
+      totalSolutions: 64,
+      totalOptimized: 22,
+      totalApproved: 18,
+      totalReused: 9,
+      domainCounts: {
+        Engineering: 32,
+        AI: 18,
+        Math: 12,
+      },
+      tagCounts: {
+        optimization: 14,
+        reasoning: 9,
+        debugging: 6,
+      },
+    };
+  }
+
   useEffect(() => {
     let isMounted = true;
 
@@ -35,24 +55,23 @@ export default function StatsPanel() {
         const data = await fetchGlobalStats();
         if (isMounted) {
           setStats(data);
+          setLoading(false);
         }
       } catch (err) {
         if (isMounted) {
-          setError("Failed to load stats.");
-        }
-      } finally {
-        if (isMounted) {
+          setError("Failed to load global stats.");
           setLoading(false);
         }
       }
     }
 
     load();
-
     return () => {
       isMounted = false;
     };
   }, []);
+
+  // --- UI STATES ---
 
   if (loading) {
     return <div className="text-white/40 text-sm">Loading global stats…</div>;
@@ -66,6 +85,7 @@ export default function StatsPanel() {
     return <div className="text-white/40 text-sm">No stats available.</div>;
   }
 
+  // --- MAIN RENDER ---
   return (
     <div className="space-y-6">
       {/* TOP METRICS */}
